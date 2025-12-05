@@ -1,16 +1,21 @@
 <?php
 
 use Illuminate\Support\Facades\Route;
+use Laravel\Sanctum\Http\Controllers\CsrfCookieController;
 
-// Sanctum
-Route::get('/sanctum/csrf-cookie', '\Laravel\Sanctum\Http\Controllers\CsrfCookieController@show');
+// -------------------------------------------------------------
+// Sanctum：CSRF Cookie（SPA が最初に叩く必要あり）
+// -------------------------------------------------------------
+Route::get('/sanctum/csrf-cookie', [CsrfCookieController::class, 'show'])
+    ->name('sanctum.csrf-cookie');
 
-// ❗ API と sanctum を先に除外
-Route::prefix('api')->group(function () {
-    // ここは絶対に空でOK（ルートは routes/api.php で定義される）
-});
+// -------------------------------------------------------------
+// ※ 重要：Breeze（Blade）の /login /register /forgot 等は削除する！
+// API 認証は routes/api.php にまとめる
+// -------------------------------------------------------------
 
-// SPA fallback（最後）
-Route::fallback(function () {
-    return view('app');
-});
+// -------------------------------------------------------------
+// SPA fallback
+// -------------------------------------------------------------
+Route::view('/{any}', 'app')
+    ->where('any', '^(?!api|sanctum).*$');

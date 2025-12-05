@@ -7,12 +7,13 @@ import '../css/app.css';
 import { createApp } from 'vue';
 import App from './App.vue';
 import router from './router';
-import axios from '@/axios';
+
+import { ensureCsrfCookie } from '@/axios';
 
 // ------------------------------------------------------------
-// ⭐ 最重要：Sanctum の CSRF Cookie を最初に取得する
+// ⭐ 最重要：Sanctum の CSRF Cookie を最初に 1 度だけ取得する
 // ------------------------------------------------------------
-await axios.get('/sanctum/csrf-cookie');
+await ensureCsrfCookie();
 
 // ------------------------------------------------------------
 // Vue アプリ起動

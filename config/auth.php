@@ -13,14 +13,12 @@ return [
     |--------------------------------------------------------------------------
     */
     'guards' => [
-        // Web guard（SPA のブラウザセッション用）
         'web' => [
             'driver' => 'session',
             'provider' => 'users',
         ],
 
-        // 🚀 API で Sanctum を使うためのガード（最重要）
-        'sanctum' => [
+        'api' => [
             'driver' => 'sanctum',
             'provider' => 'users',
         ],

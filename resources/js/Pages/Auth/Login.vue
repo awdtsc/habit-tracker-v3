@@ -61,7 +61,7 @@ const router = useRouter()
 async function submit() {
   try {
     await axios.get('/sanctum/csrf-cookie')
-    await axios.post('/login', {
+    await axios.post('/api/login', {
       email: email.value,
       password: password.value,
     })

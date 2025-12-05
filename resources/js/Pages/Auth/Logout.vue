@@ -8,8 +8,8 @@
 import axios from '@/axios'
 import { useRouter } from 'vue-router'
 
-// router 内部の cachedUser を参照するため、router ファイルから組み込み export を使う
-import { clearCachedUser } from '@/router/index'
+// router 内部の auth キャッシュをクリアする公式関数
+import { clearAuthState } from '@/router/index'
 
 const router = useRouter()
 
@@ -17,12 +17,13 @@ async function doLogout() {
   try {
     await axios.post('/api/logout')
 
-    // SPA 内のユーザ状態をクリア
-    clearCachedUser()
+    // SPA のログイン状態キャッシュを完全クリア
+    clearAuthState()
 
     router.push('/login')
   } catch (e) {
     console.error('[logout] failed:', e)
+    // 万が一失敗しても login へ
     router.push('/login')
   }
 }

@@ -78,6 +78,13 @@ const routes = [
     name: 'not-found',
     component: () => import('../Pages/NotFound.vue'),
   },
+
+  {
+    path: '/register',
+    name: 'register',
+    component: () => import('../Pages/Auth/Register.vue'),
+    meta: { public: true },
+  }
 ]
 
 /* -------------------------------------------------------

@@ -11,37 +11,45 @@ return Application::configure(basePath: dirname(__DIR__))
         commands: __DIR__ . '/../routes/console.php',
         health: '/up',
     )
-    ->withMiddleware(function (Middleware $middleware): void {
+    ->withMiddleware(function (Middleware $middleware) {
 
         /*
         |--------------------------------------------------------------------------
-        | API Middleware (Sanctum SPA)
+        | Web Middleware
         |--------------------------------------------------------------------------
-        |
-        | Sanctum’s stateful middleware **must be prepended**, so that requests
-        | coming from the SPA (localhost:5173 etc.) are treated as "first-party".
-        | This prevents unauthenticated API requests from being redirected to
-        | the "login" route, and ensures Sanctum cookie-based auth works.
-        |
         */
-        $middleware->api(prepend: [
+        $middleware->group('web', [
+            \Illuminate\Cookie\Middleware\EncryptCookies::class,
+            \Illuminate\Cookie\Middleware\AddQueuedCookiesToResponse::class,
+            \Illuminate\Session\Middleware\StartSession::class,
             \Laravel\Sanctum\Http\Middleware\EnsureFrontendRequestsAreStateful::class,
+            \Illuminate\Foundation\Http\Middleware\ValidateCsrfToken::class,
+            \Illuminate\Routing\Middleware\SubstituteBindings::class,
         ]);
 
         /*
         |--------------------------------------------------------------------------
-        | Alias (Laravel 11+)
+        | API Middleware（Sanctum SPA では StartSession 必須）
         |--------------------------------------------------------------------------
-        |
-        | auth.api → 未ログイン時に必ず 401 JSON を返す。  
-        | Redirect せず、/login を探させない。
-        |
+        */
+        $middleware->group('api', [
+            \Illuminate\Cookie\Middleware\EncryptCookies::class,
+            \Illuminate\Cookie\Middleware\AddQueuedCookiesToResponse::class,
+            \Illuminate\Session\Middleware\StartSession::class,
+            \Laravel\Sanctum\Http\Middleware\EnsureFrontendRequestsAreStateful::class,
+            \Illuminate\Routing\Middleware\SubstituteBindings::class,
+        ]);
+
+        /*
+        |--------------------------------------------------------------------------
+        | Middleware Alias
+        |--------------------------------------------------------------------------
         */
         $middleware->alias([
             'auth.api' => \App\Http\Middleware\EnsureApiAuthenticated::class,
         ]);
     })
-    ->withExceptions(function (Exceptions $exceptions): void {
+    ->withExceptions(function (Exceptions $exceptions) {
         //
     })
     ->create();

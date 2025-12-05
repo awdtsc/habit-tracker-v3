@@ -1,21 +1,22 @@
+<!-- resources/views/app.blade.php -->
 <!DOCTYPE html>
-<html lang="{{ str_replace('_', '-', app()->getLocale()) }}">
-    <head>
-        <meta charset="utf-8">
-        <meta name="viewport" content="width=device-width, initial-scale=1">
+<html lang="ja">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Habit Tracker</title>
 
-        <title inertia>{{ config('app.name', 'Laravel') }}</title>
+    <!-- Vite -->
+    @vite(['resources/js/app.js', 'resources/css/app.css'])
+</head>
+<body class="bg-gray-50 text-gray-900">
+    <!-- Vue SPA mount point -->
+    <div id="app"></div>
 
-        <!-- Fonts -->
-        <link rel="preconnect" href="https://fonts.bunny.net">
-        <link href="https://fonts.bunny.net/css?family=figtree:400,500,600&display=swap" rel="stylesheet" />
-
-        <!-- Scripts -->
-        @routes
-        @vite(['resources/js/app.js', "resources/js/Pages/{$page['component']}.vue"])
-        @inertiaHead
-    </head>
-    <body class="font-sans antialiased">
-        @inertia
-    </body>
+    <!-- CSRF Cookie の事前ロード（Sanctum SPA向け）-->
+    <script>
+        // 初回アクセス時に CSRF Cookie をもらう
+        fetch("/sanctum/csrf-cookie", { credentials: "include" });
+    </script>
+</body>
 </html>

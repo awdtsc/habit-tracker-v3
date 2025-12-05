@@ -1,16 +1,13 @@
 <template>
   <div class="min-h-screen bg-[#f7f7f7] flex flex-col items-center justify-center px-4">
-    
-    <!-- タイトル -->
+
     <h1 class="text-3xl font-bold text-[#2b6cb0] mb-10">
       ハビットトラッカー
     </h1>
 
-    <!-- カード -->
     <div
       class="w-full max-w-md bg-[#e8ecf1] rounded-2xl shadow-md p-10 flex flex-col items-center"
     >
-      <!-- 見出し -->
       <h2 class="text-xl font-bold text-gray-700 mb-8">ログイン</h2>
 
       <!-- メールアドレス -->
@@ -60,13 +57,26 @@ const router = useRouter()
 
 async function submit() {
   try {
-    await axios.get('/sanctum/csrf-cookie')
-    await axios.post('/api/login', {
+    // ★1: axios に CSRF 初期化は全て任せる（手動呼び出し禁止）
+    const res = await axios.post('/api/login', {
       email: email.value,
       password: password.value,
     })
+
+    console.info('[login] login OK:', res.data)
+
+    // ★2: SPA の唯一の「信頼できる認証状態」を同期 → /api/user
+    const userRes = await axios.get('/api/user')
+    console.info('[login] fetched user:', userRes.data)
+
+    // ★3: トップへ遷移
     router.push('/')
   } catch (e) {
+    if (e.response?.status === 401) {
+      console.warn('[login] invalid credentials')
+    } else if (e.response?.status === 422) {
+      console.warn('[login] validation error')
+    }
     console.error(e)
   }
 }

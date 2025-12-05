@@ -18,10 +18,8 @@ return [
             'provider' => 'users',
         ],
 
-        'api' => [
-            'driver' => 'sanctum',
-            'provider' => 'users',
-        ],
+        // ❌ sanctum を api guard にしない
+        // 'api' guard 自体を削除 or driver=session を使う
     ],
 
     /*

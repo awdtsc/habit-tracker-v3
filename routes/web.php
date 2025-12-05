@@ -17,5 +17,6 @@ Route::get('/sanctum/csrf-cookie', [CsrfCookieController::class, 'show'])
 // -------------------------------------------------------------
 // SPA fallback
 // -------------------------------------------------------------
+Route::view('/', 'app');
 Route::view('/{any}', 'app')
     ->where('any', '^(?!api|sanctum).*$');

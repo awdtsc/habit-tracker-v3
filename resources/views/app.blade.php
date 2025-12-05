@@ -12,11 +12,5 @@
 <body class="bg-gray-50 text-gray-900">
     <!-- Vue SPA mount point -->
     <div id="app"></div>
-
-    <!-- CSRF Cookie の事前ロード（Sanctum SPA向け）-->
-    <script>
-        // 初回アクセス時に CSRF Cookie をもらう
-        fetch("/sanctum/csrf-cookie", { credentials: "include" });
-    </script>
 </body>
 </html>

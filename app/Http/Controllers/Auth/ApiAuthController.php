@@ -16,12 +16,17 @@ class ApiAuthController extends Controller
         ]);
 
         if (!Auth::attempt($request->only('email', 'password'))) {
-            return response()->json(['message' => 'Invalid credentials'], 422);
+            return response()->json(['message' => 'Invalid credentials'], 401);
         }
 
+        // セッション再生成（固定セッション攻撃対策）
         $request->session()->regenerate();
 
-        return response()->json(['message' => 'Logged in'], 200);
+        // ★ログインユーザーを返す（最重要）
+        return response()->json([
+            'message' => 'Logged in',
+            'user' => Auth::user(),
+        ], 200);
     }
 
     public function logout(Request $request)

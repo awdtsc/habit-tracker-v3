@@ -14,38 +14,31 @@ class ApiAuthController extends Controller
      * ------------------------------------------------------------
      * Register (web middleware)
      * ------------------------------------------------------------
-     * ※ register は session を使うため web.php 配下で定義している。
      */
     public function register(Request $request)
     {
         $data = $request->validate([
             'name'     => ['required', 'string', 'max:50'],
-            'email'    => ['required', 'string', 'email', 'max:255', 'unique:users,email'],
+            'email'    => ['required', 'email', 'max:255', 'unique:users,email'],
             'password' => ['required', 'string', 'min:8'],
         ]);
 
-        // Create user
         $user = User::create([
             'name'     => $data['name'],
             'email'    => $data['email'],
             'password' => Hash::make($data['password']),
         ]);
 
-        // Immediately log in user
         Auth::login($user);
-
-        // Sanctum SPA 認証では session regenerate が必須
         $request->session()->regenerate();
 
-        return response()->json([
-            'message' => 'Registered & Logged in',
-            'user'    => $user,
-        ], 201);
+        // SPA は /api/user を見にいくので、userデータは返さない
+        return response()->json(['message' => 'Registered'], 201);
     }
 
     /**
      * ------------------------------------------------------------
-     * Login (API)
+     * Login (web middleware)
      * ------------------------------------------------------------
      */
     public function login(Request $request)
@@ -56,35 +49,41 @@ class ApiAuthController extends Controller
         ]);
 
         if (!Auth::attempt($credentials, true)) {
-            return response()->json([
-                'message' => 'Invalid credentials'
-            ], 401);
+            return response()->json(['message' => 'Invalid credentials'], 401);
         }
 
-        // 必ず regenerate を実行（セキュリティ＋SPA 認証維持）
         $request->session()->regenerate();
 
-        return response()->json([
-            'message' => 'Logged in',
-            'user'    => Auth::user(),
-        ]);
+        // userデータは返さず、成功のみ返す（SPAは/api/userを参照）
+        return response()->json(['message' => 'Logged in']);
     }
 
     /**
      * ------------------------------------------------------------
-     * Logout (API)
+     * Logout (web middleware)
      * ------------------------------------------------------------
      */
     public function logout(Request $request)
     {
         Auth::guard('web')->logout();
 
-        // Session invalidate & regenerate token
         $request->session()->invalidate();
         $request->session()->regenerateToken();
 
-        return response()->json([
-            'message' => 'Logged out'
-        ]);
+        return response()->json(['message' => 'Logged out']);
+    }
+
+    /**
+     * ------------------------------------------------------------
+     * Me（SPAの認証ソース）
+     * ------------------------------------------------------------
+     * Routerのガードが毎回これで認証状態を判断する。
+     * ------------------------------------------------------------
+     */
+    public function me(Request $request)
+    {
+        // ★形式を統一：必ず「userモデルそのまま」を返す
+        // Laravel Breeze や Jetstream と完全互換
+        return response()->json($request->user());
     }
 }

@@ -10,14 +10,39 @@ use App\Http\Controllers\Auth\ApiAuthController;
 |--------------------------------------------------------------------------
 */
 Route::get('/sanctum/csrf-cookie', [CsrfCookieController::class, 'show'])
+    ->middleware('web')
     ->name('sanctum.csrf-cookie');
 
 /*
 |--------------------------------------------------------------------------
-| Register（※ SPA でも web ミドルウェアで処理するのが正解）
+| Register（SPA でも web ミドルウェアで保護する）
 |--------------------------------------------------------------------------
 */
-Route::post('/register', [ApiAuthController::class, 'register']);
+Route::post('/api/register', [ApiAuthController::class, 'register'])
+    ->middleware('web')
+    ->name('api.register');
+
+/*
+|--------------------------------------------------------------------------
+| Login / Logout（★重要：必ず web middleware）
+|--------------------------------------------------------------------------
+*/
+Route::post('/api/login', [ApiAuthController::class, 'login'])
+    ->middleware('web')
+    ->name('api.login');
+
+Route::post('/api/logout', [ApiAuthController::class, 'logout'])
+    ->middleware('web')
+    ->name('api.logout');
+
+/*
+|--------------------------------------------------------------------------
+| 認証ユーザー取得（毎回チェック用）
+|--------------------------------------------------------------------------
+*/
+Route::get('/api/user', [ApiAuthController::class, 'me'])
+    ->middleware(['web', 'auth:sanctum'])
+    ->name('api.user');
 
 /*
 |--------------------------------------------------------------------------
@@ -25,5 +50,6 @@ Route::post('/register', [ApiAuthController::class, 'register']);
 |--------------------------------------------------------------------------
 */
 Route::view('/', 'app');
+
 Route::view('/{any}', 'app')
     ->where('any', '^(?!api|sanctum).*$');

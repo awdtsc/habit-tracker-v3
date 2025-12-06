@@ -1,3 +1,4 @@
+<!-- resources/js/Pages/Auth/Logout.vue -->
 <template>
   <div class="p-8 text-center text-gray-700">
     ログアウトしています…
@@ -8,25 +9,20 @@
 import axios from '@/axios'
 import { useRouter } from 'vue-router'
 
-// router 内部の auth キャッシュをクリアする公式関数
-import { clearAuthState } from '@/router/index'
-
 const router = useRouter()
 
-async function doLogout() {
+// ページ表示と同時にログアウト処理開始
+logout()
+
+async function logout() {
   try {
-    await axios.post('/api/logout')
-
-    // SPA のログイン状態キャッシュを完全クリア
-    clearAuthState()
-
-    router.push('/login')
+    await axios.post('/api/logout')   // ← 後で /logout に変更予定
+    console.info('[logout] OK')
   } catch (e) {
-    console.error('[logout] failed:', e)
-    // 万が一失敗しても login へ
-    router.push('/login')
+    console.error('[logout] failed', e)
   }
-}
 
-doLogout()
+  // ルーターガードが未認証を検出して自動で /login に飛ばす
+  router.push('/login')
+}
 </script>

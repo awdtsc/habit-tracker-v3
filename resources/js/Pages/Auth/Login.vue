@@ -1,3 +1,4 @@
+<!-- resources/js/Pages/Auth/Login.vue -->
 <template>
   <div class="min-h-screen bg-[#f7f7f7] flex flex-col items-center justify-center px-4">
 
@@ -57,27 +58,26 @@ const router = useRouter()
 
 async function submit() {
   try {
-    // ★1: axios に CSRF 初期化は全て任せる（手動呼び出し禁止）
-    const res = await axios.post('/api/login', {
+    // ★ ログイン（CSRF は axios が自動処理）
+    await axios.post('/api/login', {
       email: email.value,
       password: password.value,
     })
 
-    console.info('[login] login OK:', res.data)
+    console.info('[login] OK')
 
-    // ★2: SPA の唯一の「信頼できる認証状態」を同期 → /api/user
-    const userRes = await axios.get('/api/user')
-    console.info('[login] fetched user:', userRes.data)
+    // ★ 認証ガードが /api/user を確認 → 自動ログイン状態へ
+    router.push('/today')
 
-    // ★3: トップへ遷移
-    router.push('/')
   } catch (e) {
+    console.error(e)
+
     if (e.response?.status === 401) {
       console.warn('[login] invalid credentials')
-    } else if (e.response?.status === 422) {
+    }
+    if (e.response?.status === 422) {
       console.warn('[login] validation error')
     }
-    console.error(e)
   }
 }
 

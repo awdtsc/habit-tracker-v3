@@ -1,22 +1,16 @@
 <?php
 
 use Illuminate\Support\Facades\Route;
-use App\Http\Controllers\Auth\ApiAuthController;
 use App\Http\Controllers\Auth\UserInfoController;
 
 /*
 |--------------------------------------------------------------------------
-| Public Auth Routes (API)
+| API Routes (Sanctum API)
 |--------------------------------------------------------------------------
+| ※ Login/Logout/Register は絶対にここに置かない
+|    すべて routes/web.php の web middleware に置く
 */
-Route::post('/login',  [ApiAuthController::class, 'login']);
-Route::post('/logout', [ApiAuthController::class, 'logout']);
 
-/*
-|--------------------------------------------------------------------------
-| Authenticated Routes
-|--------------------------------------------------------------------------
-*/
 Route::middleware('auth.api')->group(function () {
     Route::get('/user', [UserInfoController::class, 'me']);
 });

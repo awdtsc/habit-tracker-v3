@@ -1,16 +1,12 @@
 <?php
 
 use Illuminate\Support\Facades\Route;
-use App\Http\Controllers\Auth\UserInfoController;
 
-/*
-|--------------------------------------------------------------------------
-| API Routes (Sanctum API)
-|--------------------------------------------------------------------------
-| ※ Login/Logout/Register は絶対にここに置かない
-|    すべて routes/web.php の web middleware に置く
-*/
+// v3では APIルートは Habit / Log / Weekly など個別機能用。
+// 認証系は一切置かない。
 
-Route::middleware('auth.api')->group(function () {
-    Route::get('/user', [UserInfoController::class, 'me']);
+Route::middleware('auth:sanctum')->group(function () {
+    //
+    // 例：習慣 CRUD、ログ記録、週間APIなど
+    //
 });

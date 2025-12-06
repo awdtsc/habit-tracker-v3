@@ -1,5 +1,6 @@
+<!-- resources/js/Pages/Weekly.vue -->
 <template>
-  <AppLayout>
+  <div class="p-6">
     <h2 class="text-xl font-semibold text-gray-800 mb-4">Weekly</h2>
 
     <div class="bg-white rounded-xl shadow p-6">
@@ -7,11 +8,11 @@
         Weekly Board（週タブ）のコンテンツはここに追加します。
       </p>
     </div>
-  </AppLayout>
+  </div>
 </template>
 
 <script setup>
-import AppLayout from '../Layouts/AppLayout.vue';
+// v3 では AppLayout は廃止。インポート不要。
 </script>
 
 <style scoped>

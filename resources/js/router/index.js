@@ -1,57 +1,63 @@
 // resources/js/router/index.js
-import { createRouter, createWebHistory } from 'vue-router'
-import axios from '@/axios'
+//------------------------------------------------------------
+// Vue Router（Sanctum + SPA）— 安全版
+//------------------------------------------------------------
 
-/* ======================================================
- *  認証状態の唯一のソース /api/user
- * ====================================================== */
-async function getAuthUser() {
+import { createRouter, createWebHistory } from 'vue-router'
+import api from '@/axios'
+
+// ------------------------------------------------------------
+//  毎回 /api/user を確認する
+// ------------------------------------------------------------
+async function fetchUser() {
   try {
-    const res = await axios.get('/api/user')
-    return res.data
+    const res = await api.get('/user')
+    return res.data && res.data.id ? res.data : null
   } catch {
     return null
   }
 }
 
-/* ======================================================
- *  Routes
- * ====================================================== */
+// ------------------------------------------------------------
+//  Routes
+// ------------------------------------------------------------
 const routes = [
-  { path: '/login',    name: 'login',    component: () => import('../Pages/Auth/Login.vue'),    meta: { public: true } },
+  { path: '/login', name: 'login', component: () => import('../Pages/Auth/Login.vue'), meta: { public: true } },
   { path: '/register', name: 'register', component: () => import('../Pages/Auth/Register.vue'), meta: { public: true } },
 
   { path: '/', redirect: '/today' },
 
-  { path: '/today', name: 'today', component: () => import('../Pages/Today.vue'),   meta: { requiresAuth: true } },
-  { path: '/week',  name: 'week',  component: () => import('../Pages/Weekly.vue'),  meta: { requiresAuth: true } },
+  { path: '/today', name: 'today', component: () => import('../Pages/Today.vue'), meta: { requiresAuth: true } },
+  { path: '/week', name: 'week', component: () => import('../Pages/Weekly.vue'), meta: { requiresAuth: true } },
 
-  { path: '/logout', name: 'logout', component: () => import('../Pages/Auth/Logout.vue'), meta: { requiresAuth: true } },
+  {
+    path: '/logout',
+    name: 'logout',
+    component: () => import('../Pages/Auth/Logout.vue'),
+    meta: { requiresAuth: true },
+  },
 
   { path: '/:pathMatch(.*)*', name: 'not-found', component: () => import('../Pages/NotFound.vue') },
 ]
 
-/* ======================================================
- *  Router
- * ====================================================== */
+// ------------------------------------------------------------
+//  Router Instance
+// ------------------------------------------------------------
 const router = createRouter({
   history: createWebHistory(),
   routes,
 })
 
-/* ======================================================
- *  Auth Guard：Sanctum SPA の最強・最安定版
- * ====================================================== */
+// ------------------------------------------------------------
+//  Auth Guard（キャッシュなし・完全安全版）
+// ------------------------------------------------------------
 router.beforeEach(async (to) => {
-  // 公開ページ → 通過
   if (to.meta.public) return true
 
-  // 認証が必要 → 毎回 /api/user を確認する
-  const user = await getAuthUser()
+  const user = await fetchUser()
 
   if (user) return true
 
-  // 未認証 → login へ
   return {
     name: 'login',
     query: { redirect: to.fullPath },

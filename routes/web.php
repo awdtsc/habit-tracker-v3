@@ -6,50 +6,37 @@ use App\Http\Controllers\Auth\ApiAuthController;
 
 /*
 |--------------------------------------------------------------------------
-| Sanctum：CSRF Cookie
+| Sanctum CSRF Cookie（web middleware）
 |--------------------------------------------------------------------------
 */
-Route::get('/sanctum/csrf-cookie', [CsrfCookieController::class, 'show'])
-    ->middleware('web')
+Route::middleware('web')->get('/sanctum/csrf-cookie', [CsrfCookieController::class, 'show'])
     ->name('sanctum.csrf-cookie');
 
 /*
 |--------------------------------------------------------------------------
-| Register（SPA でも web ミドルウェアで保護する）
+| Session-based Authentication（SPA: /api/* だけど web middleware）
 |--------------------------------------------------------------------------
 */
-Route::post('/api/register', [ApiAuthController::class, 'register'])
-    ->middleware('web')
-    ->name('api.register');
+Route::middleware('web')->group(function () {
+    
+    // Login
+    Route::post('/api/login',  [ApiAuthController::class, 'login']);
+    
+    // Logout
+    Route::post('/api/logout', [ApiAuthController::class, 'logout']);
+
+    // Register
+    Route::post('/api/register', [ApiAuthController::class, 'register']);
+
+    // 認証状態チェック（Session で user を返す）
+    Route::get('/api/user', [ApiAuthController::class, 'me']);
+});
 
 /*
 |--------------------------------------------------------------------------
-| Login / Logout（★重要：必ず web middleware）
+| SPA fallback（sanctum/csrf-cookie 以外の全てを Vue に渡す）
 |--------------------------------------------------------------------------
 */
-Route::post('/api/login', [ApiAuthController::class, 'login'])
-    ->middleware('web')
-    ->name('api.login');
-
-Route::post('/api/logout', [ApiAuthController::class, 'logout'])
-    ->middleware('web')
-    ->name('api.logout');
-
-/*
-|--------------------------------------------------------------------------
-| 認証ユーザー取得（毎回チェック用）
-|--------------------------------------------------------------------------
-*/
-Route::get('/api/user', [ApiAuthController::class, 'me'])
-    ->middleware(['web', 'auth:sanctum'])
-    ->name('api.user');
-
-/*
-|--------------------------------------------------------------------------
-| SPA fallback
-|--------------------------------------------------------------------------
-*/
-Route::view('/', 'app');
-
-Route::view('/{any}', 'app')
-    ->where('any', '^(?!api|sanctum).*$');
+Route::get('/{any}', function () {
+    return view('app');
+})->where('any', '.*');

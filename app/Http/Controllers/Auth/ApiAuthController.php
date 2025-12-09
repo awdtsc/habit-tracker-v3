@@ -1,4 +1,5 @@
 <?php
+// app/Http/Controllers/Auth/ApiAuthController.php
 
 namespace App\Http\Controllers\Auth;
 
@@ -8,13 +9,23 @@ use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Hash;
 use App\Models\User;
 
+/*
+|--------------------------------------------------------------------------
+| Auth API Controller  (SPA / Sanctum + Session)
+|
+| ルート:
+|   POST /register → register()
+|   POST /login    → login()
+|   POST /logout   → logout()
+|   GET  /user     → me()
+|--------------------------------------------------------------------------
+*/
+
 class ApiAuthController extends Controller
 {
-    /**
-     * ------------------------------------------------------------
-     * Register (web middleware)
-     * ------------------------------------------------------------
-     */
+    /** ------------------------
+     *  Register
+     *  ------------------------ */
     public function register(Request $request)
     {
         $data = $request->validate([
@@ -32,15 +43,12 @@ class ApiAuthController extends Controller
         Auth::login($user);
         $request->session()->regenerate();
 
-        // SPA は /api/user を見にいくので、userデータは返さない
         return response()->json(['message' => 'Registered'], 201);
     }
 
-    /**
-     * ------------------------------------------------------------
-     * Login (web middleware)
-     * ------------------------------------------------------------
-     */
+    /** ------------------------
+     *  Login
+     *  ------------------------ */
     public function login(Request $request)
     {
         $credentials = $request->validate([
@@ -54,15 +62,12 @@ class ApiAuthController extends Controller
 
         $request->session()->regenerate();
 
-        // userデータは返さず、成功のみ返す（SPAは/api/userを参照）
         return response()->json(['message' => 'Logged in']);
     }
 
-    /**
-     * ------------------------------------------------------------
-     * Logout (web middleware)
-     * ------------------------------------------------------------
-     */
+    /** ------------------------
+     *  Logout
+     *  ------------------------ */
     public function logout(Request $request)
     {
         Auth::guard('web')->logout();
@@ -73,17 +78,11 @@ class ApiAuthController extends Controller
         return response()->json(['message' => 'Logged out']);
     }
 
-    /**
-     * ------------------------------------------------------------
-     * Me（SPAの認証ソース）
-     * ------------------------------------------------------------
-     * Routerのガードが毎回これで認証状態を判断する。
-     * ------------------------------------------------------------
-     */
+    /** ------------------------
+     *  Current User
+     *  ------------------------ */
     public function me(Request $request)
     {
-        // ★形式を統一：必ず「userモデルそのまま」を返す
-        // Laravel Breeze や Jetstream と完全互換
         return response()->json($request->user());
     }
 }

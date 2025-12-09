@@ -15,34 +15,39 @@ return Application::configure(basePath: dirname(__DIR__))
 
         /*
         |--------------------------------------------------------------------------
-        | Web Middleware
+        | Web Middleware（Sanctum SPA の正しい順序）
         |--------------------------------------------------------------------------
         */
         $middleware->group('web', [
             \Illuminate\Cookie\Middleware\EncryptCookies::class,
             \Illuminate\Cookie\Middleware\AddQueuedCookiesToResponse::class,
-            \Illuminate\Session\Middleware\StartSession::class,
+
+            // ★ Sanctum SPA ここ（stateful domain 判定）
             \Laravel\Sanctum\Http\Middleware\EnsureFrontendRequestsAreStateful::class,
+
+            // ★ Session は CSRF より前で OK
+            \Illuminate\Session\Middleware\StartSession::class,
+
+            // CSRF
             \Illuminate\Foundation\Http\Middleware\ValidateCsrfToken::class,
+            \Illuminate\View\Middleware\ShareErrorsFromSession::class,
+
             \Illuminate\Routing\Middleware\SubstituteBindings::class,
         ]);
 
         /*
         |--------------------------------------------------------------------------
-        | API Middleware（Sanctum SPA では StartSession 必須）
+        | API Middleware（Stateless）
         |--------------------------------------------------------------------------
         */
         $middleware->group('api', [
-            \Illuminate\Cookie\Middleware\EncryptCookies::class,
-            \Illuminate\Cookie\Middleware\AddQueuedCookiesToResponse::class,
-            \Illuminate\Session\Middleware\StartSession::class,
-            \Laravel\Sanctum\Http\Middleware\EnsureFrontendRequestsAreStateful::class,
+            // API は基本 stateless（Cookie認証はしない）
             \Illuminate\Routing\Middleware\SubstituteBindings::class,
         ]);
 
         /*
         |--------------------------------------------------------------------------
-        | Middleware Alias
+        | Alias
         |--------------------------------------------------------------------------
         */
         $middleware->alias([

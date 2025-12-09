@@ -1,78 +1,42 @@
 // resources/js/axios.js
 //------------------------------------------------------------
-// Axios 設定（Laravel Sanctum + Cookie 認証用：v3最終版）
+// Axios 設定（Laravel Sanctum + SPA）
 //------------------------------------------------------------
 import axios from 'axios'
 
 const api = axios.create({
-  baseURL: import.meta.env.VITE_API_URL || 'http://127.0.0.1:8000',
-  withCredentials: true,
-  headers: { 'X-Requested-With': 'XMLHttpRequest', Accept: 'application/json' },
+  baseURL: '/api',              // すべての API 呼び出しを /api に統一
+  withCredentials: true,        // ← セッション維持に必須
+  headers: {
+    'X-Requested-With': 'XMLHttpRequest',
+    Accept: 'application/json',
+  },
 })
 
 // ------------------------------------------------------------
-// CSRF Cookie 初期化
+// CSRF 初期化（login / register の前に必須）
 // ------------------------------------------------------------
-let csrfInitialized = false
-
-async function ensureCsrfCookie() {
-  if (csrfInitialized) return
-
-  try {
-    await axios.get('/sanctum/csrf-cookie', {
-      baseURL: api.defaults.baseURL,
-      withCredentials: true,
-    })
-    csrfInitialized = true
-    console.info('[axios] CSRF cookie initialized')
-  } catch (e) {
-    console.error('[axios] CSRF cookie FAILED')
-    throw e
-  }
+// ★ baseURL=/api を無視し、絶対パスで叩くのが重要
+export async function initCsrf() {
+  await axios.get('/sanctum/csrf-cookie', {
+    withCredentials: true,
+  })
 }
 
 // ------------------------------------------------------------
-// Request Interceptor
-// ------------------------------------------------------------
-api.interceptors.request.use(async (config) => {
-  if (!csrfInitialized && !config._skipCsrfInit) {
-    await ensureCsrfCookie()
-  }
-  return config
-})
-
-// ------------------------------------------------------------
-// Response Interceptor（401 / 419）
+// Response Interceptor（401 → /login）
 // ------------------------------------------------------------
 api.interceptors.response.use(
   (res) => res,
-
   async (error) => {
-    const status = error?.response?.status
-    const config = error.config
+    const status = error?.response?.status ?? 0
 
-    // --- 419: GET のみ CSRF refresh → retry
-    if (status === 419 && config.method?.toUpperCase() === 'GET' && !config._retried) {
-      console.warn('[axios] 419 → CSRF refresh / retry')
-      csrfInitialized = false
-      config._retried = true
-      await ensureCsrfCookie()
-      return api.request(config)
-    }
-
-    // --- 401: 認証切れ → login へ強制遷移（SPAの標準挙動）
     if (status === 401) {
-      console.warn('[axios] 401 Unauthorized → redirect to /login')
-
-      try {
-        const router = (await import('@/router/index.js')).default
-        router.push('/login')
-      } catch (e) {
-        console.error('[axios] router push failed', e)
-      }
+      console.warn('[axios] 401 → redirect to /login')
+      window.location.href = '/login'
     }
 
-    throw error
+    return Promise.reject(error)
   }
 )
 

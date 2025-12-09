@@ -1,13 +1,12 @@
 <!-- resources/js/Pages/Auth/Login.vue -->
 <template>
-  <div class="min-h-screen bg-[#f7f7f7] flex flex-col items-center justify-center px-4">
-    <h1 class="text-3xl font-bold text-[#2b6cb0] mb-10">ハビットトラッカー</h1>
+  <div class="min-h-screen bg-[#f7f9fc] flex items-center justify-center px-6">
+    <div class="w-full max-w-md bg-white shadow-xl rounded-2xl p-8">
 
-    <div class="w-full max-w-md bg-[#e8ecf1] rounded-2xl shadow-md p-10 flex flex-col items-center">
-      <h2 class="text-xl font-bold text-gray-700 mb-8">ログイン</h2>
+      <h1 class="text-2xl font-bold text-gray-800 mb-6">ログイン</h1>
 
       <!-- メールアドレス -->
-      <div class="w-full mb-6">
+      <div class="mb-4">
         <label class="block text-sm text-gray-700 mb-1">メールアドレス</label>
         <input
           v-model.trim="email"
@@ -17,7 +16,7 @@
       </div>
 
       <!-- パスワード -->
-      <div class="w-full mb-8">
+      <div class="mb-6">
         <label class="block text-sm text-gray-700 mb-1">パスワード</label>
         <input
           v-model.trim="password"
@@ -37,14 +36,14 @@
       <button @click="goRegister" class="text-sm text-[#f7931a] hover:underline">
         ユーザー登録
       </button>
+
     </div>
   </div>
 </template>
 
 <script setup>
 import { ref } from 'vue'
-import axios from 'axios'
-import api from '@/axios'
+import api, { initCsrf } from '@/axios'
 import { useRouter } from 'vue-router'
 
 const email = ref('')
@@ -61,26 +60,17 @@ async function submit() {
     console.log('[login] start')
 
     // ------------------------------------------------------------
-    // ① CSRF Cookie（絶対パスで取得）
+    // ① CSRF Cookie（相対パスで OK。環境依存を避ける）
     // ------------------------------------------------------------
-    await axios.get('http://localhost:8000/sanctum/csrf-cookie', {
-      withCredentials: true,
-    })
+    await initCsrf()
 
     // ------------------------------------------------------------
-    // ② /api/login（絶対パス）
+    // ② /api/login（axios 共通設定を利用）
     // ------------------------------------------------------------
-    await axios.post(
-      'http://localhost:8000/api/login',
-      {
-        email: email.value,
-        password: password.value,
-      },
-      {
-        withCredentials: true,
-        headers: { 'X-Requested-With': 'XMLHttpRequest' },
-      }
-    )
+    await api.post('/login', {
+      email: email.value,
+      password: password.value,
+    })
 
     console.info('[login] success')
 

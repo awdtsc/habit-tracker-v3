@@ -25,15 +25,22 @@ export async function initCsrf() {
 
 // ------------------------------------------------------------
 // Response Interceptor（401 → /login）
+// ★ /api/user のときだけログインへ誘導
 // ------------------------------------------------------------
 api.interceptors.response.use(
   (res) => res,
   async (error) => {
     const status = error?.response?.status ?? 0
+    const url = error?.config?.url ?? ''
 
     if (status === 401) {
-      console.warn('[axios] 401 → redirect to /login')
-      window.location.href = '/login'
+      // /api/user（認証ガード用 API）のときだけ遷移
+      if (url.includes('/api/user')) {
+        console.warn('[axios] 401 (user check) → redirect to /login')
+        window.location.href = '/login'
+        return
+      }
+      // それ以外は遷移させない（エラーだけ返す）
     }
 
     return Promise.reject(error)

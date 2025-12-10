@@ -4,23 +4,27 @@ use Illuminate\Support\Facades\Route;
 
 /*
 |--------------------------------------------------------------------------
-| API Routes (Token-based APIs)
+| API Routes (Token-based API 用 — 現在は未使用)
 |--------------------------------------------------------------------------
 |
-| 現在、SPA はすべて session（web.php）経由で提供しているため、
-| このファイルは使用していません。
+| このアプリの SPA は「session + Sanctum」で認証しているため、
+| /api/* のエンドポイントはすべて routes/web.php で提供しています。
 |
-| 将来、モバイルアプリや外部連携向けに「トークン認証の純粋な API」を
-| 追加する場合に、このファイルを利用してください。
+| → 理由：
+|   api.php に置くと "api" ミドルウェアが適用されてしまい、
+|   StartSession が動かず、Sanctum の session 認証が効かないため。
+|
+| 将来、外部アプリ・モバイルアプリ向けに
+| 「Token-based API（auth:sanctum or API tokens）」を追加する場合、
+| こちらにルートを記述してください。
 |
 */
 
 Route::prefix('v1')->group(function () {
-    // 例：トークン認証で保護された API を追加する場合
-    //
-    // Route::middleware('auth:sanctum')->group(function () {
-    //     Route::get('/profile', function () {
-    //         return ['status' => 'ok'];
-    //     });
+
+    // 例（将来用）:
+    // Route::middleware('auth:sanctum')->get('/profile', function () {
+    //     return ['status' => 'ok'];
     // });
+
 });

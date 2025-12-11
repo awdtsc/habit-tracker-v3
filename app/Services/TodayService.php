@@ -1,4 +1,5 @@
 <?php
+// app/Services/TodayService.php
 
 namespace App\Services;
 
@@ -15,67 +16,83 @@ class TodayService
     public function buildTodayPayload(int $userId): array
     {
         $today   = Carbon::today()->toDateString();
-        $nowSlot = $this->detectNowSlot(Carbon::now());
+        $now     = Carbon::now();
+        $nowSlot = $this->detectNowSlot($now);
 
         // ------------------------------------------------------------
-        // 1) ユーザーの習慣取得
+        // 1) ユーザーの習慣をまとめて取得
         // ------------------------------------------------------------
         $habits = Habit::where('user_id', $userId)
             ->where('archived', false)
+            ->orderBy('time_slot')
+            ->orderBy('id')
             ->get();
 
         // ------------------------------------------------------------
-        // 2) 整形
+        // 2) 今日の HabitLog を一括取得（N+1 解消）
+        //    key: habit_id => Collection<HabitLog>
         // ------------------------------------------------------------
-        $items = $habits->map(function ($habit) use ($today, $nowSlot) {
-            $log = $this->getOrNullLog($habit->id, $today);
+        $logsByHabit = HabitLog::where('user_id', $userId)
+            ->where('date', $today)
+            ->get()
+            ->groupBy('habit_id');
+
+        // ------------------------------------------------------------
+        // 3) Habit × 今日の HabitLog を統合してフロント用配列に整形
+        // ------------------------------------------------------------
+        $items = $habits->map(function (Habit $habit) use ($logsByHabit, $nowSlot) {
+
+            /** @var HabitLog|null $log */
+            $log = optional($logsByHabit->get($habit->id))->first();
 
             return [
-                'id'        => $habit->id,
-                'title'     => $habit->title,
-                'time_slot' => (int)$habit->time_slot,
+                'id'              => $habit->id,
+                'title'           => $habit->title,
+                'time_slot'       => (int) $habit->time_slot,
+                'evaluation_type' => $habit->evaluation_type,  // ★ self / simple をフロントへ
 
-                'log'       => $this->formatLog($log),
+                // ★ status 'none' / rating null を含む統一ログ形式
+                'log'        => $this->formatLog($log),
 
                 'actionable' => $this->isActionable($habit, $log, $nowSlot),
                 'next_slot'  => $this->calcNextSlot($habit),
 
-                // anytime は actionable ではない（修正1）
-                'anytime'    => ((int)$habit->time_slot === 0),
+                // anytime 判定（slot 0）
+                'anytime'    => ((int) $habit->time_slot === 0),
             ];
         });
 
         // ------------------------------------------------------------
-        // 3) progress（修正3）
+        // 4) progress（今日の達成率）
         // ------------------------------------------------------------
         $progress = $this->calculateProgress($items);
 
         // ------------------------------------------------------------
-        // 4) top_pick（修正2）
+        // 5) top_pick（今日のおすすめ習慣）
         // ------------------------------------------------------------
         $topPick = $this->determineTopPick($items, $nowSlot);
 
         return [
-            'today'     => $today,
-            'now_slot'  => $nowSlot,
-            'habits'    => $items,
-            'progress'  => $progress,
-            'top_pick'  => $topPick,
+            'today'    => $today,
+            'now_slot' => $nowSlot,
+            'habits'   => $items,
+            'progress' => $progress,
+            'top_pick' => $topPick,
         ];
     }
 
 
-    /* ============================================================
-     * progress（修正3）
-     * ============================================================ */
 
+    /* ============================================================
+     * progress
+     * ============================================================ */
     private function calculateProgress(Collection $items): array
     {
-        // 今日の対象習慣（未来 slot も含める）
         $planned = $items->count();
 
-        $done = $items->filter(fn($it) =>
-            $it['log'] && $it['log']['status'] === 'done'
+        // ★ formatLog により log は必ず array になる
+        $done = $items->filter(
+            fn ($it) => $it['log']['status'] === 'done'
         )->count();
 
         return [
@@ -88,66 +105,74 @@ class TodayService
     }
 
 
-    /* ============================================================
-     * top_pick（修正2：future slot を slot順で評価）
-     * ============================================================ */
 
+    /* ============================================================
+     * top_pick（最優先でやるべき習慣）
+     * ============================================================ */
     private function determineTopPick(Collection $items, int $nowSlot): ?array
     {
-        $pending = $items->filter(fn($it) =>
-            !$it['log'] || $it['log']['status'] !== 'done'
+        // 未完了の習慣
+        $pending = $items->filter(
+            fn ($it) => $it['log']['status'] !== 'done'
         );
 
-        if ($pending->isEmpty()) return null;
+        if ($pending->isEmpty()) {
+            return null;
+        }
 
-        // 1) nowSlot に一致（最優先）
-        $slotMatch = $pending->first(fn($it) =>
-            $it['time_slot'] === $nowSlot
+        // 1) 今の時間帯と同じ slot
+        $slotMatch = $pending->first(
+            fn ($it) => $it['time_slot'] === $nowSlot
         );
-        if ($slotMatch) return $this->formatPick($slotMatch, 'slot_match');
+        if ($slotMatch) {
+            return $this->formatPick($slotMatch, 'slot_match');
+        }
 
-        // 2) future slot（slot昇順に変更 → 修正2）
-        $future = $pending->filter(fn($it) =>
-            $it['time_slot'] > $nowSlot && $it['time_slot'] !== 0
+        // 2) 今より後の slot（anytime は除外）
+        $future = $pending->filter(
+            fn ($it) => $it['time_slot'] > $nowSlot && $it['time_slot'] !== 0
         )->sortBy('time_slot')->first();
 
-        if ($future) return $this->formatPick($future, 'future_slot');
+        if ($future) {
+            return $this->formatPick($future, 'future_slot');
+        }
 
-        // 3) anytime（最下位）
-        $any = $pending->first(fn($it) =>
-            $it['time_slot'] === 0
+        // 3) anytime
+        $any = $pending->first(
+            fn ($it) => $it['time_slot'] === 0
         );
-        if ($any) return $this->formatPick($any, 'anytime');
+        if ($any) {
+            return $this->formatPick($any, 'anytime');
+        }
 
+        // 4) fallback（最初の未完了）
         return $this->formatPick($pending->first(), 'fallback');
     }
-
 
     private function formatPick(array $item, string $reason): array
     {
         return [
-            'habit_id' => $item['id'],
-            'title'    => $item['title'],
-            'time_slot'=> $item['time_slot'],
-            'reason'   => $reason,
+            'habit_id'  => $item['id'],
+            'title'     => $item['title'],
+            'time_slot' => $item['time_slot'],
+            'reason'    => $reason,
         ];
     }
 
 
+
     /* ============================================================
-     * HabitLog
+     * HabitLog → フロント用の一貫した形式に変換
      * ============================================================ */
-
-    private function getOrNullLog(int $habitId, string $date): ?HabitLog
+    private function formatLog(?HabitLog $log): array
     {
-        return HabitLog::where('habit_id', $habitId)
-            ->where('date', $date)
-            ->first();
-    }
-
-    private function formatLog(?HabitLog $log): ?array
-    {
-        if (!$log) return null;
+        if (!$log) {
+            return [
+                'status'     => 'none',
+                'rating'     => null,
+                'checked_at' => null,
+            ];
+        }
 
         return [
             'id'         => $log->id,
@@ -158,48 +183,66 @@ class TodayService
     }
 
 
-    /* ============================================================
-     * actionable（修正1：anytime を除外）
-     * ============================================================ */
 
+    /* ============================================================
+     * actionable
+     * ============================================================ */
     private function isActionable(Habit $habit, ?HabitLog $log, int $nowSlot): bool
     {
-        if ($log && $log->status === 'done') return false;
+        // すでに完了なら actionable ではない
+        if ($log && $log->status === 'done') {
+            return false;
+        }
 
-        $slot = (int)$habit->time_slot;
+        $slot = (int) $habit->time_slot;
 
-        // anytime は actionable ではない
-        if ($slot === 0) return false;
+        // anytime は actionable には載せない
+        if ($slot === 0) {
+            return false;
+        }
 
-        // 現在の slot 以降は actionable
+        // 現在の slot まで来ていれば actionable
         return $slot <= $nowSlot;
     }
+
 
 
     /* ============================================================
      * next_slot
      * ============================================================ */
-
     private function calcNextSlot(Habit $habit): ?int
     {
-        $slot = (int)$habit->time_slot;
-        if ($slot === 0) return null;
-        if ($slot >= 4) return null;
+        $slot = (int) $habit->time_slot;
+
+        if ($slot === 0) {
+            return null; // anytime
+        }
+        if ($slot >= 4) {
+            return null; // 夜の次はない
+        }
+
         return $slot + 1;
     }
 
 
-    /* ============================================================
-     * nowSlot 判定
-     * ============================================================ */
 
+    /* ============================================================
+     * 現在の時間帯 now_slot
+     * ============================================================ */
     private function detectNowSlot(Carbon $now): int
     {
-        $h = (int)$now->format('H');
+        $h = (int) $now->format('H');
 
-        if ($h < 10) return 1; // 朝
-        if ($h < 15) return 2; // 昼
-        if ($h < 19) return 3; // 夕
-        return 4;             // 夜
+        if ($h < 10) {
+            return 1;  // 朝
+        }
+        if ($h < 15) {
+            return 2;  // 昼
+        }
+        if ($h < 19) {
+            return 3;  // 夕
+        }
+
+        return 4;      // 夜
     }
 }

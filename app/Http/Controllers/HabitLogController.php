@@ -6,93 +6,132 @@ namespace App\Http\Controllers;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Carbon\Carbon;
+
 use App\Models\Habit;
 use App\Models\HabitLog;
 
 class HabitLogController extends Controller
 {
-    /**
-     * v3：TodayTab の完了トグル / 自己評価を一元処理する。
-     *
-     * 期待する入力（TodayTab.vue より）:
-     * POST /api/habits/{habit}/toggle
-     * {
-     *   "date": "2025-12-10",
-     *   "status": "done" | "none",
-     *   "rating": null | 0-4
-     * }
-     */
     public function toggle(Request $request, Habit $habit)
     {
         $userId = Auth::id();
 
-        // -----------------------------------------------
-        // validate
-        // -----------------------------------------------
-        $dateIso = (string)$request->input('date');
-        $date = Carbon::parse($dateIso)->startOfDay();
-        abort_if($date->gt(Carbon::today()), 422, '未来日は記録できません。');
-
-        $status = $request->input('status');   // 'done' or 'none'
-        $rating = $request->input('rating');   // null or int
-
-        if (!in_array($status, ['done', 'none'])) {
-            abort(422, 'status は done または none です。');
+        if ($habit->user_id !== $userId) {
+            return response()->json(['message' => 'Forbidden'], 403);
         }
 
-        // -----------------------------------------------
-        // 今日の habit_log を取得（v3 は time_slot を使わない）
-        // -----------------------------------------------
-        $log = HabitLog::where('user_id', $userId)
-            ->where('habit_id', $habit->id)
-            ->where('date', $date->toDateString())
+        $validated = $request->validate([
+            'date'   => 'required|date',
+            'status' => 'nullable|in:none,done',
+            'rating' => 'nullable|integer|min:0|max:4',
+        ]);
+
+        $date   = Carbon::parse($validated['date'])->toDateString();
+        $status = $validated['status'] ?? null;
+        $rating = array_key_exists('rating', $validated)
+                    ? $validated['rating']
+                    : null;
+
+        $slot   = $habit->time_slot ?? 0;
+        $type   = $habit->evaluation_type;    // ← ★ simple / self
+
+        $log = HabitLog::where('habit_id', $habit->id)
+            ->where('user_id', $userId)
+            ->where('date', $date)
+            ->where('time_slot', $slot)
             ->first();
 
-        // -----------------------------------------------
-        // 未作成なら作成（v3 の思想と一致）
-        // -----------------------------------------------
-        if (!$log) {
-            $log = new HabitLog();
-            $log->user_id  = $userId;
-            $log->habit_id = $habit->id;
-            $log->date     = $date->toDateString();
+        /* ===========================================================
+         * EVALUATION TYPE: SIMPLE（単純評価）
+         * ===========================================================*/
+        if ($type === 'simple') {
+
+            if (!$log) {
+                // 新規（status が来れば作る）
+                $log = HabitLog::create([
+                    'habit_id'   => $habit->id,
+                    'user_id'    => $userId,
+                    'date'       => $date,
+                    'time_slot'  => $slot,
+                    'status'     => $status ?? 'none',
+                    'rating'     => null,         // ★常に null
+                    'checked_at' => now(),
+                ]);
+            } else {
+
+                // status のみ変更
+                if (!is_null($status)) {
+                    $log->status = $status;
+                }
+
+                // rating は使わない
+                $log->rating = null;
+
+                $log->checked_at = now();
+                $log->save();
+            }
+
+            return $this->jsonResponse($habit, $log);
         }
 
-        // -----------------------------------------------
-        // simple / self 共通の最小仕様
-        // -----------------------------------------------
-        if ($habit->evaluation_type === 'simple') {
-            // トグル or 指定状態
-            $log->status = $status;
-            $log->rating = 0;
-            $log->checked_at = now();
+        /* ===========================================================
+         * EVALUATION TYPE: SELF（自己評価 0〜4）
+         * ===========================================================*/
+        if ($type === 'self') {
 
-        } else {
-            // self 評価型
-            $ratingVal = is_numeric($rating) ? (int)$rating : 0;
-            $log->rating = $ratingVal;
-            $log->checked_at = now();
+            if (!$log) {
+                // 初回ログ
+                $log = HabitLog::create([
+                    'habit_id'   => $habit->id,
+                    'user_id'    => $userId,
+                    'date'       => $date,
+                    'time_slot'  => $slot,
+                    'rating'     => $rating,           // ★送られてきた rating
+                    'status'     => ($rating === 4 ? 'done' : 'none'),
+                    'checked_at' => now(),
+                ]);
+            } else {
 
-            // v3 では status は 2種類に統一（UIが壊れないように）
-            $log->status = ($ratingVal >= 4) ? 'done' : 'none';
+                // ⭐ rating の更新
+                if (!is_null($rating)) {
+
+                    $log->rating = $rating;
+
+                    if ($rating === 4) {
+                        $log->status = 'done';
+                    } else {
+                        $log->status = 'none';
+                    }
+                }
+
+                // ⭐ 完了 → 未完に戻すボタン用処理
+                if ($status === 'none' && $log->status === 'done') {
+                    $log->status = 'none';
+                    $log->rating = 0; // ★自己評価 → 0 に戻す
+                }
+
+                $log->checked_at = now();
+                $log->save();
+            }
+
+            return $this->jsonResponse($habit, $log);
         }
 
-        $log->save();
+        // 念のため
+        return response()->json(['message' => 'invalid evaluation_type'], 400);
+    }
 
-        // -----------------------------------------------
-        // 返却（TodayTab.vue が期待する JSON）
-        // -----------------------------------------------
+    private function jsonResponse(Habit $habit, HabitLog $log)
+    {
         return response()->json([
             'habit' => [
-                'id'        => $habit->id,
-                'title'     => $habit->title,
-                'time_slot' => $habit->time_slot,
+                'id'  => $habit->id,
                 'log' => [
                     'id'         => $log->id,
                     'status'     => $log->status,
                     'rating'     => $log->rating,
-                    'checked_at' => optional($log->checked_at)->toDateTimeString(),
-                ],
+                    'checked_at' => $log->checked_at,
+                ]
             ]
         ]);
     }

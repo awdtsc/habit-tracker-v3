@@ -30,16 +30,22 @@ class TodayController extends Controller
         }
 
         try {
+            // 👇 ここが rating を含む TodayPayload を生成する
             $payload = $this->service->buildTodayPayload($user->id);
 
-            return response()->json($payload, 200, [], JSON_UNESCAPED_UNICODE);
+            return response()->json(
+                $payload,
+                200,
+                [],
+                JSON_UNESCAPED_UNICODE
+            );
 
         } catch (\Throwable $e) {
 
-            // 本来は logger->error() で記録するべき
+            // rating 取得含む Today の生成に失敗した場合
             return response()->json([
                 'error'   => 'today_load_failed',
-                'message' => $e->getMessage(),
+                'message' => 'Failed to load Today data.',
             ], 500);
         }
     }

@@ -1,69 +1,58 @@
 // resources/js/composables/useHabitToggle.js
 //------------------------------------------------------------
-// Habit の完了トグル（v3: log.status / log.rating）
-//------------------------------------------------------------
-
-import api from '@/axios'
+import api from '@/axios';
 
 export function useHabitToggle(today) {
 
   async function toggle(habit, payload = {}) {
 
-    // log が無いなら初期化
     if (!habit.log) {
       habit.log = {
         id: null,
         status: 'none',
         rating: null,
         checked_at: null,
-      }
+      };
     }
 
-    // ★ deep copy（将来のネスト拡張にも強い）
-    const prevLog = JSON.parse(JSON.stringify(habit.log))
+    const prevLog = JSON.parse(JSON.stringify(habit.log));
 
-    // --- 1) 楽観更新 ---
-    let newStatus
-
-    if (typeof payload.value === 'boolean') {
-      newStatus = payload.value ? 'done' : 'none'
-    } else if (payload.status) {
-      newStatus = payload.status
-    } else {
-      newStatus = habit.log.status === 'done' ? 'none' : 'done'
+    // 楽観更新
+    if (payload.status !== undefined) {
+      habit.log.status = payload.status;
     }
-
-    habit.log.status = newStatus
-
-    // rating の楽観更新
-    if ('rating' in payload) {
-      habit.log.rating = payload.rating
+    if (payload.rating !== undefined) {
+      habit.log.rating = payload.rating;
     }
+    habit.log.checked_at = new Date().toISOString();
 
-    habit.log.checked_at = new Date().toISOString()
+    const postData = {
+      date: today.value,
+      status: payload.status ?? habit.log.status,
+      rating: payload.rating ?? habit.log.rating,
+    };
 
     try {
-      // --- 2) サーバー更新 ---
-      const { data } = await api.post(`/habits/${habit.id}/toggle`, {
-        date: today.value,
-        status: habit.log.status,
-        rating: payload.rating ?? habit.log.rating ?? null,
-      })
+      const { data } = await api.post(`/habits/${habit.id}/toggle`, postData);
 
-      // --- 3) サーバー値で確定同期 ---
-      if (data?.habit?.log) {
+      if (data?.log) {
+        // 確実に reactivity を発火させる書き方
         habit.log = {
-          ...habit.log,   // 既存を維持
-          ...data.habit.log, // サーバー値を上書き
-        }
+          id: data.log.id,
+          status: data.log.status,
+          rating: data.log.rating,
+          checked_at: data.log.checked_at,
+        };
       }
 
+      // ★ ここ重要：結果を返す
+      return { log: habit.log };
+
     } catch (e) {
-      // --- 4) エラー → 元に戻す ---
-      habit.log = prevLog
-      throw e
+      habit.log = prevLog;
+      throw e;
     }
   }
 
-  return { toggle }
+  return { toggle };
 }

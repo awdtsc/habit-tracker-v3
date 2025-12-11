@@ -106,6 +106,9 @@ const {
 const { toggle } = useHabitToggle(today)
 
 async function onRowUpdate(habit, payload) {
-  await toggle(habit, payload)
+  const { log } = await toggle(habit, payload)
+
+  // ★ reactivity を確実に発火させる
+  habit.log = { ...log }
 }
 </script>

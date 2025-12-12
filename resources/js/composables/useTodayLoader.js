@@ -1,16 +1,13 @@
 // resources/js/composables/useTodayLoader.js
 //------------------------------------------------------------
-// Today API を一括でロードし、UI に必要な状態だけ expose する。
-// TodayTab.vue を薄くするための v3 正式仕様。
+// Today API を一括ロードし、UI に必要な状態だけ expose する
 //------------------------------------------------------------
 
 import { ref } from 'vue'
 import api from '@/axios'
 
 export function useTodayLoader() {
-  // -------------------------
-  // 状態
-  // -------------------------
+
   const loading = ref(true)
   const errorMessage = ref('')
 
@@ -26,7 +23,6 @@ export function useTodayLoader() {
 
   const topPick = ref(null)
 
-
   // -------------------------
   // Today API のロード
   // -------------------------
@@ -37,21 +33,13 @@ export function useTodayLoader() {
     try {
       const { data } = await api.get('/today')
 
-      // -------------------------
-      // TodayService::buildTodayPayload()
-      // {
-      //   today,
-      //   now_slot,
-      //   habits: [],
-      //   progress: {},
-      //   top_pick: {}
-      // }
-      // -------------------------
       today.value   = data.today ?? ''
       nowSlot.value = data.now_slot ?? null
       habits.value  = data.habits ?? []
 
-      // progress
+      // -------------------------
+      // ★ progress（API が返す値をそのまま使う）
+      // -------------------------
       if (data.progress) {
         progress.value = {
           planned_count: data.progress.planned_count ?? 0,
@@ -59,13 +47,11 @@ export function useTodayLoader() {
           completion_rate: data.progress.completion_rate ?? 0,
         }
       } else {
-        // fallback（progress がない場合はローカル計算）
-        const total = habits.value.length
-        const done = habits.value.filter(h => h?.log?.status === 'done').length
+        // API が progress を返さないのは仕様違反なので 0 固定にする
         progress.value = {
-          planned_count: total,
-          done_count: done,
-          completion_rate: total > 0 ? done / total : 0,
+          planned_count: 0,
+          done_count: 0,
+          completion_rate: 0,
         }
       }
 
@@ -79,23 +65,12 @@ export function useTodayLoader() {
     }
   }
 
-
-  // -------------------------
-  // 外部から API を再取得するための refresh()
-  // -------------------------
   async function refresh() {
     await fetchToday()
   }
 
-  // -------------------------
-  // 初回ロード
-  // -------------------------
   fetchToday()
 
-
-  // -------------------------
-  // 呼び出し側へ返す
-  // -------------------------
   return {
     loading,
     errorMessage,

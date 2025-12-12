@@ -86,12 +86,20 @@ class TodayService
     /* ============================================================
      * progress
      * ============================================================ */
+    /**
+     * Progress 計算（★ anytime＝slot 0 は除外）
+     */
     private function calculateProgress(Collection $items): array
     {
-        $planned = $items->count();
+        // 対象となる習慣（slot 1〜4 のみ）
+        $targets = $items->filter(
+            fn ($it) => $it['time_slot'] !== 0
+        );
 
-        // ★ formatLog により log は必ず array になる
-        $done = $items->filter(
+        $planned = $targets->count();
+
+        // slot 1〜4 の中で完了しているもの
+        $done = $targets->filter(
             fn ($it) => $it['log']['status'] === 'done'
         )->count();
 

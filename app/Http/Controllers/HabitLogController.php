@@ -33,7 +33,7 @@ class HabitLogController extends Controller
                     : null;
 
         $slot   = $habit->time_slot ?? 0;
-        $type   = $habit->evaluation_type;    // ← ★ simple / self
+        $type   = $habit->evaluation_type;
 
         $log = HabitLog::where('habit_id', $habit->id)
             ->where('user_id', $userId)
@@ -42,31 +42,25 @@ class HabitLogController extends Controller
             ->first();
 
         /* ===========================================================
-         * EVALUATION TYPE: SIMPLE（単純評価）
+         * SIMPLE
          * ===========================================================*/
         if ($type === 'simple') {
 
             if (!$log) {
-                // 新規（status が来れば作る）
                 $log = HabitLog::create([
                     'habit_id'   => $habit->id,
                     'user_id'    => $userId,
                     'date'       => $date,
                     'time_slot'  => $slot,
                     'status'     => $status ?? 'none',
-                    'rating'     => null,         // ★常に null
+                    'rating'     => null,
                     'checked_at' => now(),
                 ]);
             } else {
-
-                // status のみ変更
                 if (!is_null($status)) {
                     $log->status = $status;
                 }
-
-                // rating は使わない
                 $log->rating = null;
-
                 $log->checked_at = now();
                 $log->save();
             }
@@ -75,39 +69,30 @@ class HabitLogController extends Controller
         }
 
         /* ===========================================================
-         * EVALUATION TYPE: SELF（自己評価 0〜4）
+         * SELF
          * ===========================================================*/
         if ($type === 'self') {
 
             if (!$log) {
-                // 初回ログ
                 $log = HabitLog::create([
                     'habit_id'   => $habit->id,
                     'user_id'    => $userId,
                     'date'       => $date,
                     'time_slot'  => $slot,
-                    'rating'     => $rating,           // ★送られてきた rating
+                    'rating'     => $rating,
                     'status'     => ($rating === 4 ? 'done' : 'none'),
                     'checked_at' => now(),
                 ]);
             } else {
 
-                // ⭐ rating の更新
                 if (!is_null($rating)) {
-
                     $log->rating = $rating;
-
-                    if ($rating === 4) {
-                        $log->status = 'done';
-                    } else {
-                        $log->status = 'none';
-                    }
+                    $log->status = ($rating === 4 ? 'done' : 'none');
                 }
 
-                // ⭐ 完了 → 未完に戻すボタン用処理
                 if ($status === 'none' && $log->status === 'done') {
                     $log->status = 'none';
-                    $log->rating = 0; // ★自己評価 → 0 に戻す
+                    $log->rating = 0;
                 }
 
                 $log->checked_at = now();
@@ -117,22 +102,36 @@ class HabitLogController extends Controller
             return $this->jsonResponse($habit, $log);
         }
 
-        // 念のため
         return response()->json(['message' => 'invalid evaluation_type'], 400);
     }
 
+
+    /* ===========================================================
+     * ★ API 契約を Today API とそろえる（最重要修正）
+     * ===========================================================*/
     private function jsonResponse(Habit $habit, HabitLog $log)
     {
         return response()->json([
             'habit' => [
-                'id'  => $habit->id,
+                'id'               => $habit->id,
+                'title'            => $habit->title,
+                'description'      => $habit->description,
+                'time_slot'        => $habit->time_slot,
+                'evaluation_type'  => $habit->evaluation_type,
+                'target_times'     => $habit->target_times,
+                'days_of_week'     => $habit->days_of_week,
+                'archived'         => $habit->archived,
+                // ▼ 今日 API と同じ位置に log を返す
                 'log' => [
                     'id'         => $log->id,
+                    'habit_id'   => $habit->id,
+                    'date'       => $log->date,
+                    'time_slot'  => $log->time_slot,
                     'status'     => $log->status,
                     'rating'     => $log->rating,
                     'checked_at' => $log->checked_at,
-                ]
+                ],
             ]
-        ]);
+        ], 200, [], JSON_UNESCAPED_UNICODE);
     }
 }

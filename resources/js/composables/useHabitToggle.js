@@ -6,18 +6,22 @@ export function useHabitToggle(today) {
 
   async function toggle(habit, payload = {}) {
 
+    // log がなければ初期化
     if (!habit.log) {
       habit.log = {
         id: null,
+        habit_id: habit.id,
+        date: today.value,
+        time_slot: habit.time_slot ?? 0,
         status: 'none',
         rating: null,
         checked_at: null,
       };
     }
 
-    const prevLog = JSON.parse(JSON.stringify(habit.log));
+    const prevHabit = JSON.parse(JSON.stringify(habit));
 
-    // 楽観更新
+    // ---------- 楽観更新 ----------
     if (payload.status !== undefined) {
       habit.log.status = payload.status;
     }
@@ -33,23 +37,25 @@ export function useHabitToggle(today) {
     };
 
     try {
-      const { data } = await api.post(`/habits/${habit.id}/toggle`, postData);
+      const { data } = await api.post(
+        `/habits/${habit.id}/toggle`,
+        postData
+      );
 
-      if (data?.log) {
-        // 確実に reactivity を発火させる書き方
-        habit.log = {
-          id: data.log.id,
-          status: data.log.status,
-          rating: data.log.rating,
-          checked_at: data.log.checked_at,
-        };
+      // ★ 新仕様：data.habit.log が正
+      if (data?.habit) {
+        // habit のフィールドを UI の habit に反映
+        Object.assign(habit, data.habit);
+
+        // log だけ確実に反映
+        habit.log = { ...data.habit.log };
       }
 
-      // ★ ここ重要：結果を返す
-      return { log: habit.log };
+      return { habit, log: habit.log };
 
     } catch (e) {
-      habit.log = prevLog;
+      // ロールバック
+      Object.assign(habit, prevHabit);
       throw e;
     }
   }

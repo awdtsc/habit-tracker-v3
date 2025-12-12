@@ -1,56 +1,57 @@
 // resources/js/composables/useTodayFilters.js
-//------------------------------------------------------------
-// Today の仕分け（v3 仕様）
-//   - habit.log.status を使用
-//   - time_slot: 1=朝, 2=昼, 3=夕, 4=夜, 0/NULL=いつでも
-//   - progress は計算しない（API側の責務）
-//------------------------------------------------------------
-
 import { computed } from 'vue'
 
-export function useTodayFilters(habits) {
+export function useTodayFilters(habits, progress, activeSlot) {
 
-  // --- 共通: 完了判定 ---
-  const isDone = (h) => h.log?.status === 'done'
+  const safeList = (list) => Array.isArray(list) ? list : []
 
-  // --- 朝（1） ---
-  const morningHabits = computed(() =>
-    habits.value.filter(h => Number(h.time_slot) === 1 && !isDone(h))
-  )
+  const isDone = (h) => h?.log?.status === 'done'
 
-  // --- 昼（2） ---
-  const noonHabits = computed(() =>
-    habits.value.filter(h => Number(h.time_slot) === 2 && !isDone(h))
-  )
+  // ---------- Actionable ----------
+  const actionable = computed(() => {
+    const list = safeList(habits.value)
+    const slot = Number(activeSlot.value)
 
-  // --- 夕方（3） ---
-  const eveningHabits = computed(() =>
-    habits.value.filter(h => Number(h.time_slot) === 3 && !isDone(h))
-  )
+    return list.filter(h => {
+      const s = Number(h.time_slot ?? 0)
 
-  // --- 夜（4） ---
-  const nightHabits = computed(() =>
-    habits.value.filter(h => Number(h.time_slot) === 4 && !isDone(h))
-  )
+      // anytime
+      if (s === 0) return !isDone(h)
 
-  // --- いつでも（0 or null） ---
-  const anytimeHabits = computed(() =>
-    habits.value.filter(h =>
-      (!h.time_slot || Number(h.time_slot) === 0) && !isDone(h)
+      // slot match
+      return !isDone(h) && s === slot
+    })
+  })
+
+  // ---------- NextSlot ----------
+  const nextSlot = computed(() => {
+    const list = safeList(habits.value)
+    const slot = Number(activeSlot.value)
+
+    return list.filter(h => {
+      const s = Number(h.time_slot ?? 0)
+      return !isDone(h) && s > slot
+    })
+  })
+
+  // ---------- Done ----------
+  const doneHabits = computed(() => {
+    const list = safeList(habits.value)
+    return list.filter(h => isDone(h))
+  })
+
+  // ---------- Progress ----------
+  const progressPct = computed(() => {
+    if (!progress.value?.planned_count) return 0
+    return Math.round(
+      (progress.value.done_count / progress.value.planned_count) * 100
     )
-  )
-
-  // --- 完了 ---
-  const doneHabits = computed(() =>
-    habits.value.filter(h => isDone(h))
-  )
+  })
 
   return {
-    morningHabits,
-    noonHabits,
-    eveningHabits,
-    nightHabits,
-    anytimeHabits,
+    actionable,
+    nextSlot,
     doneHabits,
+    progressPct,
   }
 }

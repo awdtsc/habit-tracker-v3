@@ -5,7 +5,7 @@
         <!-- 1. この時間帯（未完） -->
         <!-- ========================================================= -->
         <section class="space-y-3">
-            <h2 class="text-lg font-semibold">{{ label }} の習慣</h2>
+            <h2 class="text-lg font-semibold">{{ slotLabel }} の習慣</h2>
 
             <TodayActionableSection
                 :habits="currentPending"
@@ -26,7 +26,7 @@
         <!-- ========================================================= -->
         <section v-if="currentDone.length > 0" class="space-y-3">
             <h3 class="text-md font-semibold text-gray-700">
-                {{ label }} の完了
+                {{ slotLabel }} の完了
             </h3>
 
             <TodayDoneSection
@@ -42,7 +42,6 @@
         <section class="space-y-3">
             <h3 class="text-md font-semibold text-gray-700">いつでも の習慣</h3>
 
-            <!-- 未完が存在する -->
             <TodayActionableSection
                 v-if="anytimePending.length > 0"
                 :habits="anytimePending"
@@ -50,7 +49,6 @@
                 @update="onRowUpdate"
             />
 
-            <!-- 未完は0件、完了はある＝習慣はある -->
             <p
                 v-else-if="
                     anytimePending.length === 0 && anytimeDone.length > 0
@@ -59,8 +57,6 @@
             >
                 未完了の習慣はありません。
             </p>
-
-            <!-- 未完0 & 完了0（anytime習慣が存在しない） → 何も出さない -->
         </section>
 
         <!-- ========================================================= -->
@@ -77,9 +73,12 @@
         </section>
 
         <!-- ========================================================= -->
-        <!-- 5. 次スロット（未完） -->
+        <!-- 5. 次スロット（未完）※ 今の時間帯のみ表示 -->
         <!-- ========================================================= -->
-        <section v-if="nextPending.length > 0" class="space-y-3">
+        <section
+            v-if="nextPending.length > 0 && activeSlot === nowSlot"
+            class="space-y-3"
+        >
             <h3 class="text-md font-semibold text-gray-700">
                 次の時間帯の習慣
             </h3>
@@ -92,9 +91,12 @@
         </section>
 
         <!-- ========================================================= -->
-        <!-- 6. 次スロット（完了） -->
+        <!-- 6. 次スロット（完了）※ 今の時間帯のみ表示 -->
         <!-- ========================================================= -->
-        <section v-if="nextDone.length > 0" class="space-y-3">
+        <section
+            v-if="nextDone.length > 0 && activeSlot === nowSlot"
+            class="space-y-3"
+        >
             <h3 class="text-md font-semibold text-gray-700">
                 次の時間帯の完了
             </h3>
@@ -110,39 +112,55 @@
 
 <script setup>
 import { computed, reactive, watch } from "vue";
+
 import TodayActionableSection from "@/components/today/TodayActionableSection.vue";
 import TodayNextSlotSection from "@/components/today/TodayNextSlotSection.vue";
 import TodayDoneSection from "@/components/today/TodayDoneSection.vue";
+
 import { useHabitToggle } from "@/composables/useHabitToggle";
+
+/* ----------------------------------------------------------
+   utils（slot の知識はすべてここ）
+---------------------------------------------------------- */
+import { slotKeyToLabel, SLOT_ENUM } from "@/utils/slot";
 
 /* ----------------------------------------------------------
    props
 ---------------------------------------------------------- */
 const props = defineProps({
-    slot: { type: String, required: true },
+    slot: { type: String, required: true }, // 'morning' | 'day' | 'evening' | 'night'
     today: { type: String, required: true },
     habits: { type: Array, required: true },
     progress: { type: Object, required: true },
-    nowSlot: { type: Number, required: true },
+    nowSlot: { type: Number, required: true }, // enum
 });
 
 /* ----------------------------------------------------------
    ラベル
 ---------------------------------------------------------- */
-const slotLabelMap = {
-    morning: "朝",
-    noon: "昼",
-    evening: "夕方",
-    night: "夜",
-};
-const label = computed(() => slotLabelMap[props.slot]);
+const slotLabel = computed(() => slotKeyToLabel(props.slot));
 
 /* ----------------------------------------------------------
-   slot → 数値
+   slot key → enum
 ---------------------------------------------------------- */
-const slotMap = { morning: 1, noon: 2, evening: 3, night: 4 };
-const activeSlot = computed(() => slotMap[props.slot]);
-const nextSlot = computed(() => activeSlot.value + 1);
+const activeSlot = computed(() => {
+    switch (props.slot) {
+        case "morning":
+            return SLOT_ENUM.MORNING;
+        case "day":
+            return SLOT_ENUM.DAY;
+        case "evening":
+            return SLOT_ENUM.EVENING;
+        case "night":
+            return SLOT_ENUM.NIGHT;
+        default:
+            return null;
+    }
+});
+
+const nextSlot = computed(() =>
+    activeSlot.value != null ? activeSlot.value + 1 : null
+);
 
 /* ----------------------------------------------------------
    habits を reactive に
@@ -187,15 +205,19 @@ const anytimeDone = computed(() =>
 );
 
 const nextPending = computed(() =>
-    localHabits.filter(
-        (h) => Number(h.time_slot) === nextSlot.value && !isDone(h)
-    )
+    nextSlot.value == null
+        ? []
+        : localHabits.filter(
+              (h) => Number(h.time_slot) === nextSlot.value && !isDone(h)
+          )
 );
 
 const nextDone = computed(() =>
-    localHabits.filter(
-        (h) => Number(h.time_slot) === nextSlot.value && isDone(h)
-    )
+    nextSlot.value == null
+        ? []
+        : localHabits.filter(
+              (h) => Number(h.time_slot) === nextSlot.value && isDone(h)
+          )
 );
 
 /* ----------------------------------------------------------

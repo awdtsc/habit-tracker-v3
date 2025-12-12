@@ -1,100 +1,93 @@
 <!-- resources/js/components/today/TodayAllView.vue -->
 <template>
-  <div class="space-y-6">
+    <div class="space-y-10">
+        <!-- ========================================================= -->
+        <!-- 未完了 -->
+        <!-- ========================================================= -->
+        <section class="space-y-3">
+            <h2 class="text-lg font-semibold">未完了</h2>
 
-    <!-- ▼ タイトル -->
-    <h2 class="text-xl font-semibold">すべての習慣</h2>
+            <TodayActionableSection
+                v-if="undone.length > 0"
+                :habits="undone"
+                :today="today"
+                @update="onRowUpdate"
+            />
 
-    <!-- ▼ ロード中 / エラー -->
-    <div v-if="loading" class="text-sm text-gray-500">読み込み中…</div>
-    <div v-else-if="errorMessage" class="text-sm text-red-500">{{ errorMessage }}</div>
+            <p v-else class="text-sm text-gray-500 pl-1">
+                未完了の習慣はありません。
+            </p>
+        </section>
 
-    <template v-else>
+        <!-- ========================================================= -->
+        <!-- 完了 -->
+        <!-- ========================================================= -->
+        <section v-if="done.length > 0" class="space-y-3">
+            <h2 class="text-lg font-semibold text-gray-700">完了</h2>
 
-      <!-- ▼ 未完了（優先順位順） -->
-      <section>
-        <h3 class="text-lg font-semibold mb-2">未完了</h3>
-
-        <ul class="space-y-2">
-          <li
-            v-for="h in sortedUndone"
-            :key="h.id"
-            class="p-3 border rounded bg-white flex items-center justify-between"
-          >
-            <div>
-              <div class="font-medium">{{ h.title }}</div>
-              <div class="text-xs text-gray-500">
-                {{ slotLabel(h.time_slot) }}
-              </div>
-            </div>
-          </li>
-        </ul>
-
-        <p v-if="sortedUndone.length === 0" class="text-sm text-gray-500">
-          未完了の習慣はありません。
-        </p>
-      </section>
-
-      <!-- ▼ 完了 -->
-      <section>
-        <h3 class="text-lg font-semibold mb-2">完了</h3>
-
-        <ul class="space-y-2">
-          <li
-            v-for="h in done"
-            :key="h.id"
-            class="p-3 border rounded bg-gray-50 flex items-center justify-between"
-          >
-            <div>
-              <div class="font-medium">{{ h.title }}</div>
-              <div class="text-xs text-gray-500">
-                {{ slotLabel(h.time_slot) }}
-              </div>
-            </div>
-
-            <span class="text-green-600 text-sm font-semibold">完了</span>
-          </li>
-        </ul>
-
-        <p v-if="done.length === 0" class="text-sm text-gray-500">
-          完了した習慣はありません。
-        </p>
-      </section>
-
-    </template>
-  </div>
+            <TodayDoneSection
+                :habits="done"
+                :today="today"
+                @update="onRowUpdate"
+            />
+        </section>
+    </div>
 </template>
 
 <script setup>
-import { computed } from 'vue'
-import { useTodayLoader } from '@/composables/useTodayLoader'
+import { computed } from "vue";
 
-const {
-  habits,
-  loading,
-  errorMessage,
-} = useTodayLoader()
+import TodayActionableSection from "@/components/today/TodayActionableSection.vue";
+import TodayDoneSection from "@/components/today/TodayDoneSection.vue";
 
-// ▼ スロット名
-const slotLabel = (slot) => {
-  if (!slot || slot === 0) return 'いつでも'
-  return { 1: '朝', 2: '昼', 3: '夕方', 4: '夜' }[slot] ?? '不明'
+import { useHabitToggle } from "@/composables/useHabitToggle";
+import { sortHabitsByPriority } from "@/utils/habitPriority";
+
+/* ----------------------------------------------------------
+   props（TodayTab から注入）
+---------------------------------------------------------- */
+const props = defineProps({
+    today: {
+        type: String,
+        required: true,
+    },
+    habits: {
+        type: Array,
+        required: true,
+    },
+    nowSlot: {
+        type: Number,
+        required: true,
+    },
+});
+
+/* ----------------------------------------------------------
+   判定
+---------------------------------------------------------- */
+const isDone = (h) => h?.log?.status === "done";
+
+/* ----------------------------------------------------------
+   未完了（優先順位ロジック共通）
+---------------------------------------------------------- */
+const undone = computed(() =>
+    sortHabitsByPriority(
+        props.habits.filter((h) => !isDone(h)),
+        props.nowSlot
+    )
+);
+
+/* ----------------------------------------------------------
+   完了（順序は気にしない／必要なら後で調整）
+---------------------------------------------------------- */
+const done = computed(() => props.habits.filter((h) => isDone(h)));
+
+/* ----------------------------------------------------------
+   Toggle（他タブと完全共通）
+---------------------------------------------------------- */
+const { toggle } = useHabitToggle(computed(() => props.today));
+
+async function onRowUpdate({ habit, payload }) {
+    const { log } = await toggle(habit, payload);
+    habit.log = { ...log };
 }
-
-// ▼ 完了
-const done = computed(() =>
-  habits.value.filter((h) => h.log?.status === 'done')
-)
-
-// ▼ 未完了（優先順位順の仮実装：slot → id）
-const sortedUndone = computed(() =>
-  habits.value
-    .filter((h) => h.log?.status !== 'done')
-    .sort((a, b) => {
-      const slotA = a.time_slot ?? 0
-      const slotB = b.time_slot ?? 0
-      if (slotA !== slotB) return slotA - slotB
-      return a.id - b.id
-    })
-)
 </script>

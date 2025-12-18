@@ -24,7 +24,7 @@
             >
                 <div
                     class="h-full transition-all"
-                    :class="isDone ? 'bg-blue-500' : 'bg-blue-300'"
+                    :class="isDone ? 'bg-green-500' : 'bg-blue-300'"
                     :style="{ width: isDone ? '100%' : '0%' }"
                 ></div>
             </div>
@@ -100,16 +100,30 @@ const goalText = computed(() => "1回");
    状態ラベル
 ---------------------------------------------------------- */
 const statusLabel = computed(() => {
+    // 単純評価
+    if (!isSelf.value) {
+        return isDone.value ? "完了" : "未完了";
+    }
+
+    // 自己評価
     if (rating.value === 4) return "完了";
-    if (rating.value >= 1 && rating.value <= 3) return "進行中";
+    if (rating.value >= 1) return "進行中";
     return "未完了";
 });
 
 const statusBadgeClass = computed(() => {
-    if (rating.value === 4) return "bg-blue-100 text-blue-700";
-    if (rating.value >= 1 && rating.value <= 3)
+    // 完了（共通）
+    if (isDone.value) {
+        return "bg-green-100 text-green-700";
+    }
+
+    // 自己評価の進行中
+    if (isSelf.value && rating.value >= 1) {
         return "bg-yellow-100 text-yellow-700";
-    return "bg-blue-100 text-blue-700";
+    }
+
+    // 未完了
+    return "bg-blue-100 text-blue-600";
 });
 
 /* ----------------------------------------------------------

@@ -19,7 +19,8 @@ class TodayController extends Controller
      * GET /api/today
      *
      * TodayTab 用データ。
-     * ロジックはすべて TodayService に集約。
+     * scope（morning / day / evening / night / all）に応じて
+     * progress を切り替える。
      */
     public function show(Request $request)
     {
@@ -29,9 +30,16 @@ class TodayController extends Controller
             return response()->json(['message' => 'Unauthenticated'], 401);
         }
 
+        // ---------------------------------------------
+        // ★ scope（未指定なら all）
+        // ---------------------------------------------
+        $scope = $request->query('scope', 'all');
+
         try {
-            // 👇 ここが rating を含む TodayPayload を生成する
-            $payload = $this->service->buildTodayPayload($user->id);
+            $payload = $this->service->buildTodayPayload(
+                $user->id,
+                $scope
+            );
 
             return response()->json(
                 $payload,
@@ -42,7 +50,13 @@ class TodayController extends Controller
 
         } catch (\Throwable $e) {
 
-            // rating 取得含む Today の生成に失敗した場合
+            // ログに残したい場合はここで
+            // logger()->error('[TodayController] load failed', [
+            //     'user_id' => $user->id,
+            //     'scope'   => $scope,
+            //     'error'   => $e->getMessage(),
+            // ]);
+
             return response()->json([
                 'error'   => 'today_load_failed',
                 'message' => 'Failed to load Today data.',

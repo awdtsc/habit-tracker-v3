@@ -1,30 +1,22 @@
 <!-- resources/js/components/tabs/TodayTab.vue -->
 <template>
     <div class="p-4 md:p-6 space-y-6">
-        <!-- ============================================================= -->
         <!-- ヘッダー -->
-        <!-- ============================================================= -->
         <header>
             <h1 class="text-2xl font-semibold">今日</h1>
             <p class="text-sm text-gray-500">{{ today }}</p>
         </header>
 
-        <!-- ============================================================= -->
         <!-- ロード中 / エラー -->
-        <!-- ============================================================= -->
         <div v-if="loading" class="text-gray-500 text-sm">読み込み中…</div>
 
-        <div v-if="!loading && errorMessage" class="text-red-500 text-sm">
+        <div v-else-if="errorMessage" class="text-red-500 text-sm">
             {{ errorMessage }}
         </div>
 
-        <!-- ============================================================= -->
         <!-- メイン -->
-        <!-- ============================================================= -->
-        <div v-if="!loading && !errorMessage">
-            <!-- --------------------------------------------------------- -->
+        <div v-else>
             <!-- タブ -->
-            <!-- --------------------------------------------------------- -->
             <div class="flex items-center gap-2 border-b pb-2 mb-4">
                 <button
                     v-for="t in tabs"
@@ -41,15 +33,13 @@
                 </button>
             </div>
 
-            <!-- --------------------------------------------------------- -->
-            <!-- 達成率 -->
-            <!-- --------------------------------------------------------- -->
+            <!-- 達成率（表示の真実：フロント算出） -->
             <section class="space-y-2 mb-6">
                 <div class="flex items-center justify-between">
                     <span class="text-sm text-gray-600">今日の達成率</span>
-                    <span class="text-sm font-semibold">
-                        {{ progressPct }}%
-                    </span>
+                    <span class="text-sm font-semibold"
+                        >{{ progressPct }}%</span
+                    >
                 </div>
 
                 <div
@@ -62,66 +52,59 @@
                 </div>
 
                 <p class="text-xs text-gray-500">
-                    {{ progress.done_count }} /
-                    {{ progress.planned_count }} 件完了
+                    {{ tabProgress.done }} / {{ tabProgress.total }} 件完了
                 </p>
             </section>
 
-            <!-- --------------------------------------------------------- -->
-            <!-- スロットタブ（自動 / 朝 / 昼 / 夕 / 夜） -->
-            <!-- --------------------------------------------------------- -->
+            <!-- スロットタブ -->
             <TodaySlotView
                 v-if="isSlotTab"
                 :slot="resolvedTab"
                 :today="today"
                 :habits="habits"
-                :progress="progress"
                 :now-slot="nowSlot"
+                :next-slot="nextSlot"
                 @update="onRowUpdate"
             />
 
-            <!-- --------------------------------------------------------- -->
             <!-- すべて -->
-            <!-- --------------------------------------------------------- -->
             <TodayAllView
                 v-if="activeTab === 'all'"
                 :today="today"
                 :habits="habits"
                 :now-slot="nowSlot"
+                :top-pick="topPick"
+                @update="onRowUpdate"
             />
         </div>
     </div>
+
+    <!-- デバッグ（任意） -->
+    <!-- <pre class="text-xs bg-gray-100 p-2 mt-4">{{ tabProgress }}</pre> -->
 </template>
 
 <script setup>
 import { ref, computed, watch } from "vue";
 
-/* ---------------------------------------------------------
-   components
---------------------------------------------------------- */
+/* components */
 import TodaySlotView from "@/components/today/TodaySlotView.vue";
 import TodayAllView from "@/components/today/TodayAllView.vue";
 
-/* ---------------------------------------------------------
-   composables
---------------------------------------------------------- */
+/* composables */
 import { useTodayLoader } from "@/composables/useTodayLoader";
-import { useTodayFilters } from "@/composables/useTodayFilters";
 import { useHabitToggle } from "@/composables/useHabitToggle";
 
-/* ---------------------------------------------------------
-   utils
---------------------------------------------------------- */
+/* utils */
 import { enumToSlotKey, isSlotKey } from "@/utils/slot";
+import {
+    computeTabProgress,
+    computeOptimisticProgress,
+} from "@/utils/todayProgress";
 
-/* ---------------------------------------------------------
-   constants
---------------------------------------------------------- */
+/* constants */
 const TAB_STORAGE_KEY = "today-current-tab";
 
-/* ---------------------------------------------------------
-   tabs
---------------------------------------------------------- */
+/* tabs */
 const tabs = [
     { key: "auto", label: "自動" },
     { key: "morning", label: "朝" },
@@ -131,45 +114,80 @@ const tabs = [
     { key: "all", label: "すべて" },
 ];
 
-/* ---------------------------------------------------------
-   activeTab
---------------------------------------------------------- */
+/* activeTab（UI 状態） */
 const activeTab = ref(localStorage.getItem(TAB_STORAGE_KEY) ?? "auto");
+watch(activeTab, (v) => localStorage.setItem(TAB_STORAGE_KEY, v));
 
-watch(activeTab, (v) => {
-    localStorage.setItem(TAB_STORAGE_KEY, v);
-});
+/* today data（初回のみfetch） */
+const { today, nowSlot, nextSlot, habits, topPick, loading, errorMessage } = useTodayLoader();
 
-/* ---------------------------------------------------------
-   today data
---------------------------------------------------------- */
-const { today, nowSlot, habits, progress, loading, errorMessage } =
-    useTodayLoader();
-
-/* ---------------------------------------------------------
-   slot resolve
---------------------------------------------------------- */
+/* resolvedTab（UI上の“今のスコープ”） */
 const resolvedTab = computed(() => {
     if (activeTab.value === "auto") {
-        return enumToSlotKey(nowSlot.value);
+        return enumToSlotKey(nowSlot.value) ?? "all";
     }
     return activeTab.value;
 });
-
 const isSlotTab = computed(() => isSlotKey(resolvedTab.value));
 
-/* ---------------------------------------------------------
-   progress
---------------------------------------------------------- */
-const { progressPct } = useTodayFilters(habits, progress, nowSlot);
+/* 表示の真実：タブ別 progress（フロント算出） */
+const tabProgress = ref({
+    scope: "all",
+    done: 0,
+    total: 0,
+    percent: 0,
+});
 
-/* ---------------------------------------------------------
-   toggle
---------------------------------------------------------- */
-const { toggle } = useHabitToggle(today);
+// 初回ロード後 / タブ変更時に算出（ネスト変更までは追わない）
+watch(
+    [resolvedTab, habits],
+    ([scope]) => {
+        tabProgress.value = computeTabProgress(habits.value, scope);
+    },
+    { immediate: true }
+);
+
+const progressPct = computed(() => tabProgress.value?.percent ?? 0);
+
+/* toggle */
+const { toggle } = useHabitToggle();
 
 async function onRowUpdate({ habit, payload }) {
-    const { log } = await toggle(habit, payload);
-    habit.log = { ...log };
+    const scope = resolvedTab.value;
+
+    const prev = { ...(tabProgress.value ?? {}) };
+
+    // 1) optimistic：progressだけ即時
+    const optimistic = computeOptimisticProgress(prev, habit, payload, scope);
+    if (optimistic) tabProgress.value = optimistic;
+
+    try {
+        // 2) backend：toggle（log確定）
+        const result = await toggle(habit, {
+            ...payload,
+            scope, // 互換のため残す（progressは無視するが、現状のAPI形を壊さない）
+        });
+        if (!result) return;
+
+        if (result.log) {
+            habit.log = { ...result.log };
+        }
+
+        // 3) 確定：habitsから再計算（表示の真実）
+        tabProgress.value = computeTabProgress(habits.value, scope);
+
+        // 任意：backend progress と差があるなら警告（調査用）
+        if (result.progress && result.progress.scope === scope) {
+            const a = tabProgress.value;
+            const b = result.progress;
+            if (a.done !== b.done || a.total !== b.total || a.percent !== b.percent) {
+                console.warn("[progress mismatch]", { ui: a, api: b });
+            }
+        }
+    } catch (e) {
+        // 失敗したら rollback
+        tabProgress.value = prev;
+        throw e;
+    }
 }
 </script>

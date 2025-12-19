@@ -24,15 +24,19 @@ class HabitLogController extends Controller
         // validate
         // ------------------------------
         $validated = $request->validate([
+            // ★ 週タブ用：任意日のトグルを許可
+            'date'   => 'nullable|date_format:Y-m-d',
+
             'status' => 'nullable|in:none,done',
             'rating' => 'nullable|integer|min:0|max:4',
             'scope'  => 'required|in:morning,day,evening,night,all',
         ]);
 
         // ------------------------------
-        // 今日の定義は backend が持つ
+        // date（週タブは date を送る / 今日タブは未送信でOK）
         // ------------------------------
-        $date = now()->timezone('Asia/Tokyo')->toDateString();
+        $date = $validated['date']
+            ?? now()->timezone('Asia/Tokyo')->toDateString();
 
         $status = $validated['status'] ?? null;
         $rating = array_key_exists('rating', $validated) ? $validated['rating'] : null;
@@ -59,6 +63,7 @@ class HabitLogController extends Controller
             if (!is_null($status)) {
                 $log->status = $status;
             }
+
             $log->rating = null;
             $log->checked_at = now();
             $log->save();
@@ -109,7 +114,6 @@ class HabitLogController extends Controller
             return $log;
         }
 
-        // 無いので作る（ここが同時実行で競合する可能性がある）
         try {
             return HabitLog::create([
                 'habit_id'   => $habitId,
@@ -124,11 +128,8 @@ class HabitLogController extends Controller
             ]);
         } catch (QueryException $e) {
             if ($this->isDuplicateKey($e)) {
-                // 競合相手が先に作った：再取得して続行（500にしない）
                 $log = $query->first();
-                if ($log) {
-                    return $log;
-                }
+                if ($log) return $log;
             }
             throw $e;
         }
@@ -177,22 +178,15 @@ class HabitLogController extends Controller
         ], 200, [], JSON_UNESCAPED_UNICODE);
     }
 
-    /* ===========================================================
-     * ★ scope 別 progress（高速化：get/whereIn を排除）
-     *   - all: 全スロット（anytime含む）
-     *   - 通常タブ: そのスロットのみ（anytime除外）
-     * ===========================================================*/
     private function calculateProgressByScope(int $userId, string $date, string $scope): array
     {
         $slot = ($scope === 'all') ? null : $this->scopeToSlot($scope);
 
-        // total: habits を DB で count（コレクション化しない）
         $total = Habit::where('user_id', $userId)
             ->where('archived', false)
             ->when($slot !== null, fn ($q) => $q->where('time_slot', $slot))
             ->count();
 
-        // done: habit_logs を habits に JOIN して count（whereIn 排除）
         $done = HabitLog::query()
             ->join('habits', 'habit_logs.habit_id', '=', 'habits.id')
             ->where('habits.user_id', $userId)

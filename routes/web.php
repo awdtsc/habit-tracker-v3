@@ -6,6 +6,7 @@ use Laravel\Sanctum\Http\Controllers\CsrfCookieController;
 use App\Http\Controllers\Auth\ApiAuthController;
 use App\Http\Controllers\TodayController;
 use App\Http\Controllers\HabitLogController;
+use App\Http\Controllers\WeekController;
 
 /*
 |--------------------------------------------------------------------------
@@ -50,6 +51,9 @@ Route::middleware('web')->group(function () {
 
         // 今日のデータ
         Route::get('/api/today', [TodayController::class, 'show']);
+
+        // 週のデータ（★追加）
+        Route::get('/api/week', [WeekController::class, 'show']);
 
         /*
         |--------------------------------------------------------------------------

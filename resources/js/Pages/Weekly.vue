@@ -1,24 +1,16 @@
 <!-- resources/js/Pages/Weekly.vue -->
 <template>
-  <div class="px-4 py-6 max-w-3xl mx-auto">
-
-    <h2 class="text-xl font-semibold text-gray-800 mb-4">
-      Weekly
-    </h2>
-
-    <div class="bg-white rounded-xl shadow p-6">
-      <p class="text-gray-600">
-        Weekly Board（週タブ）のコンテンツはここに追加します。
-      </p>
-    </div>
-
+  <div class="min-h-screen bg-gray-50">
+    <AppHeader />
+    <main class="max-w-5xl mx-auto">
+      <WeekTab />
+    </main>
   </div>
 </template>
 
 <script setup>
-// Weekly は現状ロジックなし
-</script>
+defineOptions({ name: "WeeklyPage" });
 
-<style scoped>
-/* 必要であればここにスタイルを追加 */
-</style>
+import AppHeader from "@/components/layout/AppHeader.vue";
+import WeekTab from "@/components/tabs/WeekTab.vue";
+</script>

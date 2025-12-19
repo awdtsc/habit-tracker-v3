@@ -5,6 +5,7 @@ namespace App\Http\Controllers;
 
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
+use Illuminate\Database\QueryException;
 
 use App\Models\Habit;
 use App\Models\HabitLog;
@@ -39,35 +40,28 @@ class HabitLogController extends Controller
         $slot = $habit->time_slot ?? 0;
         $type = $habit->evaluation_type;
 
-        $log = HabitLog::where('habit_id', $habit->id)
-            ->where('user_id', $userId)
-            ->where('date', $date)
-            ->where('time_slot', $slot)
-            ->first();
+        // ------------------------------
+        // 競合に強い「取得 or 作成」
+        //   - DB に unique がある前提で、1062 を吸収して 500 を避ける
+        // ------------------------------
+        $log = $this->findOrCreateLogSafely(
+            habitId: $habit->id,
+            userId: $userId,
+            date: $date,
+            slot: $slot
+        );
 
         /* ===========================================================
          * SIMPLE（status が真実）
          * ===========================================================*/
         if ($type === 'simple') {
 
-            if (!$log) {
-                $log = HabitLog::create([
-                    'habit_id'   => $habit->id,
-                    'user_id'    => $userId,
-                    'date'       => $date,
-                    'time_slot'  => $slot,
-                    'status'     => $status ?? 'none',
-                    'rating'     => null,
-                    'checked_at' => now(),
-                ]);
-            } else {
-                if (!is_null($status)) {
-                    $log->status = $status;
-                }
-                $log->rating = null;
-                $log->checked_at = now();
-                $log->save();
+            if (!is_null($status)) {
+                $log->status = $status;
             }
+            $log->rating = null;
+            $log->checked_at = now();
+            $log->save();
 
             return $this->jsonResponse($habit, $log, $validated['scope'], $date);
         }
@@ -77,38 +71,78 @@ class HabitLogController extends Controller
          * ===========================================================*/
         if ($type === 'self') {
 
-            if (!$log) {
-                $log = HabitLog::create([
-                    'habit_id'   => $habit->id,
-                    'user_id'    => $userId,
-                    'date'       => $date,
-                    'time_slot'  => $slot,
-                    'rating'     => $rating,
-                    'status'     => ($rating === 4 ? 'done' : 'none'),
-                    'checked_at' => now(),
-                ]);
-            } else {
-
-                // ★ rating が来たときだけ rating/status を更新（SELF の真実は rating）
-                if (!is_null($rating)) {
-                    $log->rating = $rating;
-                    $log->status = ($rating === 4 ? 'done' : 'none');
-                }
-
-                // ★ SELF では status 操作で rating を壊さない（未完了に戻すなら rating を送る）
-                if (!is_null($status) && $status === 'none' && is_null($rating)) {
-                    $log->status = 'none';
-                    // rating は触らない
-                }
-
-                $log->checked_at = now();
-                $log->save();
+            // ★ rating が来たときだけ rating/status を更新（SELF の真実は rating）
+            if (!is_null($rating)) {
+                $log->rating = $rating;
+                $log->status = ($rating === 4 ? 'done' : 'none');
             }
+
+            // ★ SELF では status 操作で rating を壊さない（未完了に戻すなら rating を送る）
+            if (!is_null($status) && $status === 'none' && is_null($rating)) {
+                $log->status = 'none';
+                // rating は触らない
+            }
+
+            $log->checked_at = now();
+            $log->save();
 
             return $this->jsonResponse($habit, $log, $validated['scope'], $date);
         }
 
         return response()->json(['message' => 'invalid evaluation_type'], 400);
+    }
+
+    /**
+     * habit_id + user_id + date + time_slot の1行を必ず返す
+     * - 無ければ作る
+     * - 競合で duplicate key(1062) が出たら、作れた側を再取得して返す（500回避）
+     */
+    private function findOrCreateLogSafely(int $habitId, int $userId, string $date, int $slot): HabitLog
+    {
+        $query = HabitLog::where('habit_id', $habitId)
+            ->where('user_id', $userId)
+            ->where('date', $date)
+            ->where('time_slot', $slot);
+
+        $log = $query->first();
+        if ($log) {
+            return $log;
+        }
+
+        // 無いので作る（ここが同時実行で競合する可能性がある）
+        try {
+            return HabitLog::create([
+                'habit_id'   => $habitId,
+                'user_id'    => $userId,
+                'date'       => $date,
+                'time_slot'  => $slot,
+
+                // 初期値（後段の type ロジックで確定させる）
+                'status'     => 'none',
+                'rating'     => null,
+                'checked_at' => now(),
+            ]);
+        } catch (QueryException $e) {
+            if ($this->isDuplicateKey($e)) {
+                // 競合相手が先に作った：再取得して続行（500にしない）
+                $log = $query->first();
+                if ($log) {
+                    return $log;
+                }
+            }
+            throw $e;
+        }
+    }
+
+    private function isDuplicateKey(QueryException $e): bool
+    {
+        // MySQL/MariaDB duplicate key: SQLSTATE[23000], errorInfo[1]=1062
+        $errorInfo = $e->errorInfo ?? null;
+        if (is_array($errorInfo) && isset($errorInfo[1]) && (int) $errorInfo[1] === 1062) {
+            return true;
+        }
+        $msg = $e->getMessage();
+        return str_contains($msg, 'Duplicate entry') || str_contains($msg, 'SQLSTATE[23000]');
     }
 
     /* ===========================================================

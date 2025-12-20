@@ -3,7 +3,11 @@
 // TodayTab 用ユーティリティ
 // - computeTabProgress: “今見てるタブ” の達成率を habits から計算（純関数）
 // - computeOptimisticProgress: トグル直後の達成率を楽観更新（純関数）
-// 重要: backend は log.status を真実として返す前提（self でも status=done なら done）
+//
+// ★方針（重要）
+// - SIMPLE: status が真実（status === "done" で完了）
+// - SELF  : rating が真実（rating === 4 で完了）
+//   → status は表示互換として残っていても、progress の真実には使わない
 //------------------------------------------------------------
 
 export function scopeToSlot(scope) {
@@ -21,8 +25,20 @@ export function scopeToSlot(scope) {
     }
 }
 
+/**
+ * ★done判定の真実
+ * - simple: status === "done"
+ * - self  : rating === 4
+ */
 export function isHabitDone(habit) {
-    return habit?.log?.status === "done";
+    const type = habit?.evaluation_type;
+    const log = habit?.log ?? null;
+
+    if (type === "self") {
+        return Number(log?.rating ?? 0) === 4;
+    }
+
+    return (log?.status ?? "none") === "done";
 }
 
 export function calcPercent(done, total) {
@@ -77,16 +93,29 @@ export function isInProgressScope(habit, scope) {
 /**
  * payload から「押下後に done になるか」を推定
  * - simple: status で決まる
- * - self  : rating===4 が done（ただし backend は最終的に status を返す）
+ * - self  : rating===4 が真実
+ *
+ * ★重要
+ * self で rating が来てない場合、status が来ても progress の真実は動かさない。
+ * （＝“ratingが真実”を壊さないため、beforeDone を返す）
  */
 export function predictAfterDone(habit, payload) {
     const beforeDone = isHabitDone(habit);
+    const type = habit?.evaluation_type;
 
-    if (payload?.rating !== undefined) {
-        return Number(payload.rating) === 4;
+    // SELF：rating が来たときだけ真実が動く
+    if (type === "self") {
+        if (
+            payload &&
+            Object.prototype.hasOwnProperty.call(payload, "rating")
+        ) {
+            return Number(payload.rating) === 4;
+        }
+        return beforeDone;
     }
 
-    if (payload?.status !== undefined) {
+    // SIMPLE：status が来たらそれが真実
+    if (payload && Object.prototype.hasOwnProperty.call(payload, "status")) {
         return payload.status === "done";
     }
 

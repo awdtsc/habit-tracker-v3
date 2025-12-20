@@ -1,10 +1,21 @@
 // resources/js/composables/useTodayLoader.js
 //------------------------------------------------------------
 // Today API（キャッシュ即描画 → silent revalidate）
+//
+// ★初回（キャッシュ無し）は silent にせず loading を立ててブロック
+// ★キャッシュがある時は即描画して、裏で revalidate（ちらつき防止）
 //------------------------------------------------------------
 import { ref, watch } from "vue";
 import api from "@/axios";
 import { getCachedToday, setCachedToday } from "@/state/todayCache";
+
+function normalizeScope(v) {
+    // ここに入る値は TodayTab の apiScope から来る想定だが、
+    // 想定外が来ても cache key を汚さないために正規化する
+    const s = String(v || "all");
+    if (["all", "morning", "day", "evening", "night"].includes(s)) return s;
+    return "all";
+}
 
 export function useTodayLoader(scopeRef) {
     const loading = ref(false);
@@ -16,7 +27,6 @@ export function useTodayLoader(scopeRef) {
     const nowSlot = ref(null);
     const nextSlot = ref(null);
     const habits = ref([]);
-    const progress = ref({ done: 0, total: 0, percent: 0 });
     const topPick = ref(null);
 
     let controller = null;
@@ -27,7 +37,6 @@ export function useTodayLoader(scopeRef) {
         nowSlot.value = data?.now_slot ?? null;
         nextSlot.value = data?.next_slot ?? null;
         habits.value = data?.habits ?? [];
-        progress.value = data?.progress ?? { done: 0, total: 0, percent: 0 };
         topPick.value = data?.top_pick ?? null;
     }
 
@@ -35,23 +44,26 @@ export function useTodayLoader(scopeRef) {
         const { silent = false, preferCache = true, revalidate = true } = opts;
 
         errorMessage.value = "";
-        const key = scope || "auto";
+        const key = normalizeScope(scope);
 
-        // 1) キャッシュ即描画
+        // 1) cache immediate paint
         const cached = preferCache ? getCachedToday(key) : null;
         if (cached) {
             applyPayload(cached);
             hasLoaded.value = true;
         }
-
         if (cached && !revalidate) return cached;
 
-        // 2) API（表示済みなら強制 silent）
+        // 2) API
         if (controller) controller.abort();
         controller = new AbortController();
         const myNo = ++reqNo;
 
-        const effectiveSilent = silent || hasLoaded.value || !!cached;
+        const isFirstColdLoad = !cached && !hasLoaded.value;
+        const effectiveSilent = isFirstColdLoad
+            ? false
+            : silent || hasLoaded.value || !!cached;
+
         if (effectiveSilent) refreshing.value = true;
         else loading.value = true;
 
@@ -60,31 +72,32 @@ export function useTodayLoader(scopeRef) {
                 params: { scope: key },
                 signal: controller.signal,
             });
-
             if (myNo !== reqNo) return null;
 
             applyPayload(res.data);
             hasLoaded.value = true;
             setCachedToday(key, res.data);
-
             return res.data;
         } catch (e) {
-            if (e?.name === "CanceledError" || e?.code === "ERR_CANCELED")
+            // axios の cancel / AbortController の cancel を両対応
+            if (e?.name === "CanceledError" || e?.code === "ERR_CANCELED") {
                 return null;
+            }
             errorMessage.value = "今日データの取得に失敗しました";
             return null;
         } finally {
+            // このリクエストが最新なら controller を掃除
+            if (myNo === reqNo) controller = null;
+
             if (effectiveSilent) refreshing.value = false;
             else loading.value = false;
         }
     }
 
-    // scope 変更は silent 更新（画面は即残す）
     watch(
         scopeRef,
         async (v) => {
-            const scope = v || "auto";
-            await fetchToday(scope, {
+            await fetchToday(v, {
                 silent: true,
                 preferCache: true,
                 revalidate: true,
@@ -103,7 +116,6 @@ export function useTodayLoader(scopeRef) {
         nowSlot,
         nextSlot,
         habits,
-        progress,
         topPick,
 
         fetchToday,

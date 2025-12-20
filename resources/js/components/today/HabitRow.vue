@@ -6,10 +6,7 @@
     >
         <!-- 左側：タイトル + ゲージ -->
         <div class="min-w-0 flex-1">
-            <div
-                class="font-medium truncate"
-                :class="isDone ? 'line-through' : ''"
-            >
+            <div class="font-medium truncate" :class="isDone ? 'line-through' : ''">
                 {{ habit.title }}
             </div>
 
@@ -37,6 +34,7 @@
                 <button
                     v-for="n in [0, 1, 2, 3, 4]"
                     :key="n"
+                    type="button"
                     @click="onSelectRating(n)"
                     class="w-7 h-7 rounded-full flex items-center justify-center text-sm font-medium transition-all"
                     :class="ratingButtonClass(n)"
@@ -55,6 +53,7 @@
 
             <!-- 完了ボタン -->
             <button
+                type="button"
                 class="px-3 py-1 text-sm rounded border hover:bg-gray-50"
                 @click="toggleStatus"
             >
@@ -65,7 +64,7 @@
 </template>
 
 <script setup>
-import { shallowRef, computed, watch } from "vue";
+import { ref, computed, watch } from "vue";
 
 const props = defineProps({
     habit: { type: Object, required: true },
@@ -75,54 +74,58 @@ const props = defineProps({
 
 const emit = defineEmits(["update"]);
 
-/* ----------------------------------------------------------
-   localLog = shallowRef（ちらつき防止の最重要ポイント）
----------------------------------------------------------- */
-const localLog = shallowRef({ ...props.log });
+/**
+ * ★同期の肝
+ * - 以前: shallowRef({ ...props.log }) にしていたため、storeが log を in-place で更新しても追従しなかった
+ * - 今回: props.log を真実として参照しつつ、クリック直後だけ pending を上書き表示して“止血”する
+ */
+const pending = ref(null); // { status?, rating? } 一時上書き
 
-watch(
-    () => props.log,
-    (v) => {
-        localLog.value = { ...v };
-    }
-);
-
-/* ----------------------------------------------------------
-   計算系
----------------------------------------------------------- */
 const isSelf = computed(() => props.habit.evaluation_type === "self");
-const rating = computed(() => localLog.value.rating ?? 0);
-const isDone = computed(() => localLog.value.status === "done");
+
+const viewStatus = computed(() => {
+    return (pending.value?.status ?? props.log.status ?? "none");
+});
+const viewRating = computed(() => {
+    // SELF のときだけ意味があるが、UI都合で常に 0..4 に正規化
+    const r = pending.value?.rating ?? props.log.rating ?? 0;
+    return typeof r === "number" ? r : 0;
+});
+
+const isDone = computed(() => {
+  if (isSelf.value) return viewRating.value === 4; // ★ここだけを真実にする
+  return viewStatus.value === "done";
+});
 
 const goalText = computed(() => "1回");
+
+/**
+ * store が props.log を patch したら pending を解除
+ * - in-place で status/rating が変わるので、それを watch すればOK（参照差し替え不要）
+ */
+watch(
+    () => [props.log.status, props.log.rating, props.log.checked_at, props.log.id],
+    () => {
+        pending.value = null;
+    }
+);
 
 /* ----------------------------------------------------------
    状態ラベル
 ---------------------------------------------------------- */
 const statusLabel = computed(() => {
-    // 単純評価
     if (!isSelf.value) {
         return isDone.value ? "完了" : "未完了";
     }
 
-    // 自己評価
-    if (rating.value === 4) return "完了";
-    if (rating.value >= 1) return "進行中";
+    if (viewRating.value === 4) return "完了";
+    if (viewRating.value >= 1) return "進行中";
     return "未完了";
 });
 
 const statusBadgeClass = computed(() => {
-    // 完了（共通）
-    if (isDone.value) {
-        return "bg-green-100 text-green-700";
-    }
-
-    // 自己評価の進行中
-    if (isSelf.value && rating.value >= 1) {
-        return "bg-yellow-100 text-yellow-700";
-    }
-
-    // 未完了
+    if (isDone.value) return "bg-green-100 text-green-700";
+    if (isSelf.value && viewRating.value >= 1) return "bg-yellow-100 text-yellow-700";
     return "bg-blue-100 text-blue-600";
 });
 
@@ -130,44 +133,47 @@ const statusBadgeClass = computed(() => {
    完了ボタン
 ---------------------------------------------------------- */
 function toggleStatus() {
-    const newStatus = isDone.value ? "none" : "done";
-    const newRating = isDone.value ? 0 : 4;
+  if (isSelf.value) {
+    const nextRating = (viewRating.value === 4) ? 0 : 4;
+    const nextStatus = nextRating === 4 ? "done" : "none";
 
-    // ちらつき防止：Optimistic Update
-    localLog.value = {
-        ...localLog.value,
-        status: newStatus,
-        rating: newRating,
-    };
+    pending.value = { rating: nextRating, status: nextStatus };
 
     emit("update", {
-        habit: props.habit,
-        payload: {
-            date: props.today,
-            status: newStatus,
-            rating: newRating,
-        },
+      habit: props.habit,
+      payload: {
+        date: props.today,
+        status: nextStatus,
+        rating: nextRating, // ★SELFは常に送る
+      },
     });
+    return;
+  }
+
+  // simple
+  const nextStatus = isDone.value ? "none" : "done";
+  pending.value = { status: nextStatus, rating: null };
+
+  emit("update", {
+    habit: props.habit,
+    payload: { date: props.today, status: nextStatus, rating: null },
+  });
 }
 
 /* ----------------------------------------------------------
    rating ボタン
 ---------------------------------------------------------- */
 function onSelectRating(n) {
-    const newStatus = n === 4 ? "done" : "none";
+    const nextStatus = n === 4 ? "done" : "none";
 
-    // ちらつき防止：localLog を即更新
-    localLog.value = {
-        ...localLog.value,
-        rating: n,
-        status: newStatus,
-    };
+    // ちらつき止血
+    pending.value = { rating: n, status: nextStatus };
 
     emit("update", {
         habit: props.habit,
         payload: {
             date: props.today,
-            status: newStatus,
+            status: nextStatus,
             rating: n,
         },
     });
@@ -177,9 +183,8 @@ function onSelectRating(n) {
    rating ボタンの色
 ---------------------------------------------------------- */
 function ratingButtonClass(n) {
-    if (n <= rating.value) {
-        return "bg-blue-500 text-white";
-    }
+    // “現在のrating” を基準に塗る（pendingも反映）
+    if (n <= viewRating.value) return "bg-blue-500 text-white";
     return "bg-gray-200 text-gray-500";
 }
 </script>

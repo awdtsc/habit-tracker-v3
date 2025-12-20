@@ -18,13 +18,16 @@
 
     <template v-if="hasLoaded">
       <WeekGrid :days="week.days" @toggle="onToggle" />
-      <WeekProgressCard :days="week.days" :weekly-progress="week.weekly_progress" />
+      <WeekProgressCard
+        :days="week.days"
+        :weekly-progress="week.weekly_progress"
+      />
     </template>
   </div>
 </template>
 
 <script setup>
-import { computed, onMounted, onUnmounted, watch } from "vue";
+import { computed, onMounted, onUnmounted, watch, ref } from "vue";
 import { useRoute, useRouter } from "vue-router";
 
 import { useWeekLoader } from "@/composables/useWeekLoader";
@@ -41,37 +44,72 @@ const router = useRouter();
 
 const { loading, hasLoaded, errorMessage, week, fetchWeek } = useWeekLoader();
 
+/* ------------------------------
+  Range Label
+------------------------------ */
 const rangeLabel = computed(() => {
   if (!week.value.week_start || !week.value.week_end) return "—";
   return `${formatMMDD(week.value.week_start)} 〜 ${formatMMDD(week.value.week_end)}`;
 });
 
-function syncQuery(weekStart) {
-  router.replace({ query: { ...route.query, week: weekStart } });
+/* ------------------------------
+  週ロード（単一入口 + 二重fetch防止）
+------------------------------ */
+const lastRequestedWeek = ref(null);
+const inflight = ref(false);
+
+async function loadWeek(weekStart) {
+  if (!weekStart) return;
+
+  // 同じ週を連打しても fetch しない
+  if (lastRequestedWeek.value === weekStart) return;
+
+  // in-flight中は「最後に要求された週」だけに寄せる
+  lastRequestedWeek.value = weekStart;
+  if (inflight.value) return;
+
+  inflight.value = true;
+  try {
+    // ここで lastRequestedWeek が変わる可能性があるのでループで吸収
+    while (true) {
+      const target = lastRequestedWeek.value;
+      await fetchWeek(target);
+
+      // fetch中に別週が要求されていなければ終了
+      if (lastRequestedWeek.value === target) break;
+    }
+  } finally {
+    inflight.value = false;
+  }
+}
+
+async function syncQuery(weekStart) {
+  // query更新だけ。fetchはwatch側の単一入口で行う
+  await router.replace({ query: { ...route.query, week: weekStart } });
 }
 
 async function goPrevWeek() {
   const base = week.value.week_start || getWeekStartISO();
   const prev = addDaysISO(base, -7);
-  syncQuery(prev);
-  await fetchWeek(prev);
+  await syncQuery(prev);
 }
 
 async function goNextWeek() {
   const base = week.value.week_start || getWeekStartISO();
   const next = addDaysISO(base, 7);
-  syncQuery(next);
-  await fetchWeek(next);
+  await syncQuery(next);
 }
 
 /* ------------------------------
   Progress（ローカル計算）
+  ★SELFは rating が真実（rating===4 のみ done）
 ------------------------------ */
 function isDoneForCount(h) {
   const type = h.evaluation_type;
   const status = h.log?.status ?? "none";
   const rating = h.log?.rating ?? null;
-  if (type === "self") return rating === 4 || status === "done";
+
+  if (type === "self") return Number(rating ?? 0) === 4;
   return status === "done";
 }
 
@@ -136,12 +174,23 @@ onUnmounted(() => {
 
 /* ------------------------------
   Toggle（ユーザー操作）
+  ★SELFは rating 主導で status を決める（真実を壊さない入口）
 ------------------------------ */
 async function onToggle({ date, habit }) {
-  const curStatus = habit.log?.status ?? "none";
-  const nextStatus = curStatus === "done" ? "none" : "done";
   const isSelf = habit.evaluation_type === "self";
-  const nextRating = isSelf ? (nextStatus === "done" ? 4 : 0) : null;
+
+  let nextStatus = "none";
+  let nextRating = null;
+
+  if (isSelf) {
+    const curRating = Number(habit.log?.rating ?? 0);
+    nextRating = curRating === 4 ? 0 : 4;
+    nextStatus = nextRating === 4 ? "done" : "none";
+  } else {
+    const curStatus = habit.log?.status ?? "none";
+    nextStatus = curStatus === "done" ? "none" : "done";
+    nextRating = null;
+  }
 
   const p = logStore.toggle(
     date,
@@ -156,25 +205,32 @@ async function onToggle({ date, habit }) {
 
   try {
     await p;
-    recalcProgress();
-  } catch {
+  } finally {
+    // 成功でも失敗でも、最終状態で再計算（store側ロールバックも吸収）
     recalcProgress();
   }
 }
 
 /* ------------------------------
-  初回ロード & 週切替
+  初回ロード & 週切替（fetchの単一入口）
 ------------------------------ */
 onMounted(async () => {
   const qsWeek = typeof route.query.week === "string" ? route.query.week : null;
-  await fetchWeek(qsWeek || getWeekStartISO());
+  const initial = qsWeek || getWeekStartISO();
+  await loadWeek(initial);
+
+  // 初回に query.week が無いなら、URLも揃える（任意だけどデバッグが楽）
+  if (!qsWeek) {
+    await syncQuery(initial);
+  }
 });
 
 watch(
   () => route.query.week,
   async (v) => {
-    if (typeof v === "string" && v && v !== week.value.week_start) {
-      await fetchWeek(v);
+    const next = typeof v === "string" && v ? v : getWeekStartISO();
+    if (next !== week.value.week_start) {
+      await loadWeek(next);
     }
   }
 );

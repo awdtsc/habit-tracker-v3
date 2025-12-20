@@ -35,15 +35,18 @@ function emitToggle(habit) {
   emit("toggle", { date: props.day.date, habit });
 }
 
+/**
+ * ★真実ルール
+ * - simple: status が真実
+ * - self  : rating が真実（rating===4 のみ done）
+ */
 function isDone(h) {
   const type = h.evaluation_type;
   const status = h.log?.status ?? "none";
   const rating = h.log?.rating ?? null;
 
-  // self: rating=4 を done 扱い（status も保険）
-  if (type === "self") return rating === 4 || status === "done";
-
-  // simple
+  // ★真実仕様
+  if (type === "self") return Number(rating ?? 0) === 4;
   return status === "done";
 }
 

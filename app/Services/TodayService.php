@@ -10,113 +10,169 @@ use Illuminate\Support\Collection;
 
 class TodayService
 {
-    /**
-     * TodayTab 用の JSON 全体を生成。
-     * scope: morning / day / evening / night / all
-     */
+    public function __construct(
+        private TodayProgressService $progressService
+    ) {}
+
     public function buildTodayPayload(int $userId, string $scope = 'all'): array
     {
-        $today   = Carbon::today()->toDateString();
-        $now     = Carbon::now();
-        $nowSlot = $this->detectNowSlot($now);
-        $nextSlot = $this->detectNextSlot($nowSlot); // ★ root next_slot
+        $tz = 'Asia/Tokyo';
 
-        // 1) 習慣取得
+        $today      = Carbon::now($tz)->toDateString();
+        $now        = Carbon::now($tz);
+        $isoWeekday = Carbon::now($tz)->isoWeekday(); // 1..7
+
+        $nowSlot  = $this->detectNowSlot($now);
+        $nextSlot = $this->detectNextSlot($nowSlot);
+
+        // ★曜日スケジュールで「今日やる習慣」だけ
         $habits = Habit::where('user_id', $userId)
             ->where('archived', false)
             ->orderBy('time_slot')
             ->orderBy('id')
-            ->get();
+            ->get()
+            ->filter(fn (Habit $h) => $this->isHabitScheduledOn($h, $isoWeekday))
+            ->values();
 
-        // 2) 今日のログ取得
+        /**
+         * ★重要：履歴を残す設計なので「最新1件」を確実に取る
+         * checked_at desc で並べて groupBy -> first が最新
+         */
         $logsByHabit = HabitLog::where('user_id', $userId)
             ->where('date', $today)
+            ->orderBy('checked_at', 'desc')
             ->get()
             ->groupBy('habit_id');
 
-        // 3) Habit × Log
         $items = $habits->map(function (Habit $habit) use ($logsByHabit, $nowSlot) {
             $log = optional($logsByHabit->get($habit->id))->first();
+            $logArr = $this->formatLog($log);
 
             return [
                 'id'              => $habit->id,
                 'title'           => $habit->title,
                 'time_slot'       => (int) $habit->time_slot,
                 'evaluation_type' => $habit->evaluation_type,
-                'log'             => $this->formatLog($log),
+                'log'             => $logArr,
 
-                // backend flags（将来フロントが信じられるように残す）
-                'actionable'      => $this->isActionable($habit, $log, $nowSlot),
+                'actionable'      => $this->isActionable($habit, $logArr, $nowSlot),
                 'next_slot'       => $this->calcNextSlot($habit),
                 'anytime'         => ((int) $habit->time_slot === 0),
             ];
         });
 
-        // 4) progress（scope 連動・正）
-        $progress = $this->calculateProgress($items, $scope);
+        // ★progress_by_scope を初回から全部返す（初回タブ遷移のちらつき防止）
+        $progressByScope = $this->buildProgressByScopeFromItems($items);
 
-        // 5) top_pick
-        $topPick = $this->determineTopPick($items, $nowSlot);
+        // 互換：従来の progress（単体）は scope に合わせて返す
+        $normalizedScope = $this->normalizeScope($scope);
+        $progress = $progressByScope[$normalizedScope] ?? $progressByScope['all'];
+
+        $topPick  = $this->determineTopPick($items, $nowSlot);
 
         return [
             'today'     => $today,
             'now_slot'  => $nowSlot,
-            'next_slot' => $nextSlot,   // ★ 追加
+            'next_slot' => $nextSlot,
             'habits'    => $items,
+
+            // 互換：単体
             'progress'  => $progress,
+
+            // ★追加：全スコープ
+            'progress_by_scope' => $progressByScope,
+            'progress_updated_at' => Carbon::now($tz)->toIso8601String(),
+
             'top_pick'  => $topPick,
         ];
     }
 
-    /* progress */
-    private function calculateProgress(Collection $items, string $scope): array
+    /**
+     * items（= 今日やる習慣 + 最新ログ）から progress を全スコープ分まとめて計算
+     * - all: 全習慣（anytime含む）
+     * - morning/day/evening/night: time_slot==1..4 のみ（anytime=0は除外）
+     * - done判定:
+     *   - simple: status === done
+     *   - self  : rating === 4 のみ
+     */
+    private function buildProgressByScopeFromItems(Collection $items): array
     {
-        if ($scope === 'all') {
-            $targets = $items; // all は anytime(0)含む
-        } else {
-            $slot = $this->scopeToSlot($scope);
-            $targets = $items->filter(fn ($it) => $it['time_slot'] === $slot); // 特定スロットのみ
+        $init = fn () => ['done' => 0, 'total' => 0, 'percent' => 0];
+
+        $out = [
+            'all'     => $init(),
+            'morning' => $init(),
+            'day'     => $init(),
+            'evening' => $init(),
+            'night'   => $init(),
+        ];
+
+        foreach ($items as $it) {
+            $done = $this->isDoneItem($it);
+            $slot = (int)($it['time_slot'] ?? 0);
+
+            // all（anytime含む）
+            $out['all']['total']++;
+            if ($done) $out['all']['done']++;
+
+            // slot scopes（anytime=0は除外）
+            if ($slot >= 1 && $slot <= 4) {
+                $key = match ($slot) {
+                    1 => 'morning',
+                    2 => 'day',
+                    3 => 'evening',
+                    4 => 'night',
+                };
+
+                $out[$key]['total']++;
+                if ($done) $out[$key]['done']++;
+            }
         }
 
-        $total = $targets->count();
+        foreach ($out as $k => $p) {
+            $total = (int)($p['total'] ?? 0);
+            $done  = (int)($p['done'] ?? 0);
+            $out[$k]['percent'] = $total === 0 ? 0 : (int) round($done / $total * 100);
+        }
 
-        $done = $targets->filter(
-            fn ($it) => ($it['log']['status'] ?? 'none') === 'done'
-        )->count();
-
-        return [
-            'scope'   => $scope,
-            'done'    => $done,
-            'total'   => $total,
-            'percent' => $total > 0 ? (int) round($done / $total * 100) : 0,
-        ];
+        return $out;
     }
 
-    private function scopeToSlot(string $scope): int
+    private function normalizeScope(string $scope): string
     {
         return match ($scope) {
-            'morning' => 1,
-            'day'     => 2,
-            'evening' => 3,
-            'night'   => 4,
-            default   => 0,
+            'morning', 'day', 'evening', 'night', 'all' => $scope,
+            default => 'all',
         };
     }
 
-    /* top_pick */
+    /* ------------------------------
+     * done 判定（SELFは rating=4 が真実）
+     * ------------------------------ */
+    private function isDoneItem(array $item): bool
+    {
+        $type = $item['evaluation_type'] ?? 'simple';
+        $log  = $item['log'] ?? [];
+
+        if ($type === 'self') {
+            return (($log['rating'] ?? null) === 4);
+        }
+        return (($log['status'] ?? 'none') === 'done');
+    }
+
     private function determineTopPick(Collection $items, int $nowSlot): ?array
     {
-        $pending = $items->filter(fn ($it) => ($it['log']['status'] ?? 'none') !== 'done');
+        $pending = $items->filter(fn ($it) => !$this->isDoneItem($it));
         if ($pending->isEmpty()) return null;
 
-        $slotMatch = $pending->first(fn ($it) => $it['time_slot'] === $nowSlot);
+        $slotMatch = $pending->first(fn ($it) => (int)$it['time_slot'] === $nowSlot);
         if ($slotMatch) return $this->formatPick($slotMatch, 'slot_match');
 
-        $future = $pending->filter(fn ($it) => $it['time_slot'] > $nowSlot && $it['time_slot'] !== 0)
+        $future = $pending->filter(fn ($it) => (int)$it['time_slot'] > $nowSlot && (int)$it['time_slot'] !== 0)
             ->sortBy('time_slot')->first();
         if ($future) return $this->formatPick($future, 'future_slot');
 
-        $any = $pending->first(fn ($it) => $it['time_slot'] === 0);
+        $any = $pending->first(fn ($it) => (int)$it['time_slot'] === 0);
         if ($any) return $this->formatPick($any, 'anytime');
 
         return $this->formatPick($pending->first(), 'fallback');
@@ -132,7 +188,6 @@ class TodayService
         ];
     }
 
-    /* log */
     private function formatLog(?HabitLog $log): array
     {
         if (!$log) {
@@ -151,10 +206,13 @@ class TodayService
         ];
     }
 
-    /* actionable */
-    private function isActionable(Habit $habit, ?HabitLog $log, int $nowSlot): bool
+    private function isActionable(Habit $habit, array $logArr, int $nowSlot): bool
     {
-        if ($log && $log->status === 'done') return false;
+        if ($habit->evaluation_type === 'self') {
+            if (($logArr['rating'] ?? null) === 4) return false;
+        } else {
+            if (($logArr['status'] ?? 'none') === 'done') return false;
+        }
 
         $slot = (int) $habit->time_slot;
         if ($slot === 0) return false;
@@ -182,5 +240,24 @@ class TodayService
     {
         if ($nowSlot >= 4) return null;
         return $nowSlot + 1;
+    }
+
+    /* =========================
+     * 曜日スケジュール判定
+     * ========================= */
+    private function isHabitScheduledOn(Habit $habit, int $isoWeekday): bool
+    {
+        $days = $this->normalizeJsonArray($habit->days_of_week);
+        return count($days) === 0 ? true : in_array($isoWeekday, $days, true);
+    }
+
+    private function normalizeJsonArray($value): array
+    {
+        if (is_array($value)) return $value;
+        if (is_string($value) && $value !== '') {
+            $decoded = json_decode($value, true);
+            return is_array($decoded) ? $decoded : [];
+        }
+        return [];
     }
 }

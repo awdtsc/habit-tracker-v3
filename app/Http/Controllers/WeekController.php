@@ -32,13 +32,13 @@ class WeekController extends Controller
         $weekStart = $base->copy()->startOfWeek(Carbon::MONDAY)->startOfDay();
         $weekEnd   = $weekStart->copy()->addDays(6)->endOfDay();
 
-        // habits
         $habits = Habit::query()
             ->where('user_id', $userId)
             ->where('archived', false)
+            ->orderBy('time_slot')
+            ->orderBy('id')
             ->get();
 
-        // logs（date が DATE/DATETIME どっちでも拾えるよう whereDate で）
         $logs = HabitLog::query()
             ->where('user_id', $userId)
             ->whereIn('habit_id', $habits->pluck('id')->all())
@@ -47,23 +47,13 @@ class WeekController extends Controller
             ->orderBy('checked_at', 'desc')
             ->get();
 
-        // map：
-        //  - strict: habit_id|date|time_slot
-        //  - loose : habit_id|date  (time_slot がズレても拾う保険)
-        $mapStrict = [];
-        $mapLoose  = [];
-
+        // ★同一性は habit_id + date（その日の最新 checked_at を真実とする）
+        $map = [];
         foreach ($logs as $log) {
             $dateStr = $this->toDateString($log->date);
-            $slot = (int)($log->time_slot ?? 0);
-
-            $kStrict = $this->keyStrict((int)$log->habit_id, $dateStr, $slot);
-            $mapStrict[$kStrict] = $log;
-
-            $kLoose = $this->keyLoose((int)$log->habit_id, $dateStr);
-            // loose は “最新 checked_at” を優先（orderBy desc なので最初に入ったものが最新）
-            if (!isset($mapLoose[$kLoose])) {
-                $mapLoose[$kLoose] = $log;
+            $k = $this->keyLoose((int)$log->habit_id, $dateStr);
+            if (!isset($map[$k])) {
+                $map[$k] = $log;
             }
         }
 
@@ -85,16 +75,8 @@ class WeekController extends Controller
                     continue;
                 }
 
-                $slot = (int)($habit->time_slot ?? 0);
-
-                // まず strict で探す → 無ければ loose で拾う
-                $kStrict = $this->keyStrict((int)$habit->id, $dateStr, $slot);
-                $log = $mapStrict[$kStrict] ?? null;
-
-                if (!$log) {
-                    $kLoose = $this->keyLoose((int)$habit->id, $dateStr);
-                    $log = $mapLoose[$kLoose] ?? null;
-                }
+                $k = $this->keyLoose((int)$habit->id, $dateStr);
+                $log = $map[$k] ?? null;
 
                 $logPayload = null;
                 if ($log) {
@@ -108,7 +90,7 @@ class WeekController extends Controller
                     ];
                 }
 
-                $dayHabits[] = [
+                $item = [
                     'id'              => $habit->id,
                     'title'           => $habit->title,
                     'description'     => $habit->description,
@@ -120,8 +102,12 @@ class WeekController extends Controller
                     'log'             => $logPayload,
                 ];
 
+                $dayHabits[] = $item;
+
                 $total++;
-                if ($log && $log->status === 'done') {
+
+                // ★done判定：SELFは rating=4 のみ
+                if ($this->isDoneForHabit($habit->evaluation_type, $log)) {
                     $done++;
                 }
             }
@@ -165,8 +151,6 @@ class WeekController extends Controller
                 $dbName = 'unknown';
             }
 
-            // あなたの例：habit_id=1, date=2025-12-19, slot=1 が拾えてるか確認用
-            $exampleStrict = $this->keyStrict(1, '2025-12-19', 1);
             $exampleLoose  = $this->keyLoose(1, '2025-12-19');
 
             $payload['_debug'] = [
@@ -179,10 +163,8 @@ class WeekController extends Controller
                 'habits_count' => $habits->count(),
                 'logs_found' => $logs->count(),
                 'example_keys' => [
-                    'strict' => $exampleStrict,
                     'loose'  => $exampleLoose,
-                    'strict_hit' => isset($mapStrict[$exampleStrict]),
-                    'loose_hit'  => isset($mapLoose[$exampleLoose]),
+                    'loose_hit'  => isset($map[$exampleLoose]),
                 ],
                 'first_log' => $logs->first() ? [
                     'id' => $logs->first()->id,
@@ -190,11 +172,22 @@ class WeekController extends Controller
                     'date' => $this->toDateString($logs->first()->date),
                     'time_slot' => (int)($logs->first()->time_slot ?? 0),
                     'status' => $logs->first()->status,
+                    'rating' => $logs->first()->rating,
                 ] : null,
             ];
         }
 
         return response()->json($payload, 200, [], JSON_UNESCAPED_UNICODE);
+    }
+
+    private function isDoneForHabit(string $evaluationType, ?HabitLog $log): bool
+    {
+        if (!$log) return false;
+
+        if ($evaluationType === 'self') {
+            return ((int)($log->rating ?? -1) === 4);
+        }
+        return ($log->status === 'done');
     }
 
     private function toDateString($value): string
@@ -203,11 +196,6 @@ class WeekController extends Controller
             return Carbon::instance($value)->toDateString();
         }
         return (string)$value;
-    }
-
-    private function keyStrict(int $habitId, string $date, int $slot): string
-    {
-        return $habitId . '|' . $date . '|' . $slot;
     }
 
     private function keyLoose(int $habitId, string $date): string

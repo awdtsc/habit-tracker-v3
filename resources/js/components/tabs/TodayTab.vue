@@ -57,6 +57,7 @@
         :habits="habits"
         :now-slot="nowSlot"
         :next-slot="nextSlot"
+        :show-next="true"
         @update="onRowUpdate"
       />
 
@@ -99,7 +100,6 @@ watch(activeTab, (v) => localStorage.setItem(TAB_STORAGE_KEY, v));
 
 /**
  * resolvedTab: 表示用（auto は nowSlot に解決）
- * apiScope: API用（auto は all に正規化）
  */
 const resolvedTab = computed(() => {
   if (activeTab.value === "auto") return enumToSlotKey(nowSlot.value) ?? "all";
@@ -107,17 +107,19 @@ const resolvedTab = computed(() => {
 });
 const isSlotTab = computed(() => isSlotKey(resolvedTab.value));
 
-const apiScope = computed(() => {
-  const v = activeTab.value;
-  return v === "auto" ? "all" : v; // morning/day/evening/night/all
-});
+/**
+ * ★重要：
+ * 「次の習慣（次スロット）」を表示するには、昼タブでも夕のデータが必要。
+ * なので Today API は常に scope=all で取る。
+ */
+const apiScope = computed(() => "all");
 
-// loader
+// loader（常に all を取得）
 const { today, nowSlot, nextSlot, habits, topPick, loading, errorMessage } =
   useTodayLoader(apiScope);
 
 /* ==============================
-   Progress（ローカル計算：タブの概念に合わせて割り切る）
+   Progress（ローカル計算）
    - morning/day/evening/night: time_slot がその値のものだけ
    - all: 全部（いつでも=0 も含む）
    - auto: resolvedTab と同じ計算（表示タブの概念に一致）
@@ -168,7 +170,7 @@ const uiProgress = computed(() => {
 
   const slot = scopeKeyToSlot(scopeKey);
 
-  // ★「そのスロットの習慣」だけで割り切る（表示セクションの混合とは切り離す）
+  // 「そのスロットの習慣」だけでカウント（いつでも=0は含めない）
   const filtered = list.filter((h) => Number(h.time_slot ?? 0) === slot);
 
   const total = filtered.length;
@@ -186,7 +188,6 @@ const progressPct = computed(() => uiProgress.value.percent);
 
 /* ==============================
    store wiring（log参照の共有）
-   - subscribe は不要（attachHabits が log 参照差し替えするので UI は computed で追従）
 ================================ */
 const logStore = useHabitLogStore();
 const owner = logStore.createOwner();
@@ -202,12 +203,9 @@ watch(
 
 /* ==============================
    Toggle（ユーザー操作）
-   - payload優先
-   - SELF は rating が真実（ratingに合わせて status を同期）
-   - optimistic は store が即 patchLog する → UI/バーは即反映
 ================================ */
 async function onRowUpdate({ habit, payload }) {
-  const scope = apiScope.value;
+  const scope = apiScope.value; // 常に all
   const date = today.value;
   const type = habit.evaluation_type;
 

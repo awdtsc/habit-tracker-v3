@@ -4,15 +4,13 @@ import api from "@/axios";
 
 /**
  * シングルトンストア（HabitLogだけ）
- * - logsByKey: `${date}:${habitId}` -> logObject
+ * - logsByKey: `${date}:${habitTimeId}` -> logObject
  * - attach(ownerId, date, habitObj): habitObj.log を store の logObject 参照に差し替えて同期する
  * - patchLog(): ★参照差し替え（new object）で UI も追従させる
  * - toggle(): optimistic -> API -> confirmed / rollback（競合は requestVersion で捨てる）
  *
  * ★注意：
- * WeekController は strict(habit+date+slot) が外れたら loose(habit+date) で log を拾う。
- * つまり現状は「1日1habit=1log」で、time_slot は identity ではなく属性。
- * なので key は date+habitId のままが安全。
+ * log の同一性は habit_time_id + date。
  */
 
 const state = reactive({
@@ -32,8 +30,8 @@ const listeners = new Set();
 /* ------------------------------
   helpers
 ------------------------------ */
-function keyOf(date, habitId) {
-    return `${date}:${habitId}`;
+function keyOf(date, habitTimeId) {
+    return `${date}:${habitTimeId}`;
 }
 
 function getTodayJstISO() {
@@ -65,6 +63,7 @@ function ensureLogObject(key, initial = null) {
         state.logsByKey.set(key, {
             id: initial?.id ?? null,
             habit_id: initial?.habit_id ?? null,
+            habit_time_id: initial?.habit_time_id ?? null,
             time_slot: Number(initial?.time_slot ?? 0),
             status: initial?.status ?? "none",
             rating: initRating,
@@ -87,6 +86,14 @@ function getAttachedHabitObjs(key) {
         for (const h of set) out.push(h);
     }
     return out;
+}
+
+function resolveHabitTimeId(habitObj) {
+    return habitObj?.habit_time_id ?? habitObj?.log?.habit_time_id ?? null;
+}
+
+function isSelfEval(habitObj) {
+    return (habitObj?.evaluation_type ?? "simple") === "self";
 }
 
 /* ------------------------------
@@ -112,9 +119,10 @@ function detachOwner(ownerId) {
 }
 
 function attach(ownerId, date, habitObj) {
-    if (!date || !habitObj?.id) return;
+    const habitTimeId = resolveHabitTimeId(habitObj);
+    if (!date || !habitTimeId) return;
 
-    const key = keyOf(date, habitObj.id);
+    const key = keyOf(date, habitTimeId);
 
     if (!keysByOwner.has(ownerId)) keysByOwner.set(ownerId, new Set());
     keysByOwner.get(ownerId).add(key);
@@ -147,8 +155,8 @@ function subscribe(fn) {
  * log patch（確定/optimistic共通）
  * ★重要: “参照差し替え” を行う
  */
-function patchLog(date, habitId, patch, meta = {}) {
-    const key = keyOf(date, habitId);
+function patchLog(date, habitTimeId, patch, meta = {}) {
+    const key = keyOf(date, habitTimeId);
     const prev = ensureLogObject(key, patch);
 
     const hasRatingKey = Object.prototype.hasOwnProperty.call(
@@ -162,6 +170,7 @@ function patchLog(date, habitId, patch, meta = {}) {
     const next = {
         ...prev,
         ...(patch ?? {}),
+        habit_time_id: patch?.habit_time_id ?? prev.habit_time_id,
         // time_slot は属性。APIから返ってきた値があればそれを採用（nullならprev維持）
         time_slot: Object.prototype.hasOwnProperty.call(
             patch ?? {},
@@ -178,7 +187,7 @@ function patchLog(date, habitId, patch, meta = {}) {
         if (habitObj) habitObj.log = next;
     }
 
-    emit({ type: "log:patched", date, habitId, log: next, ...meta });
+    emit({ type: "log:patched", date, habitTimeId, log: next, ...meta });
 }
 
 /**
@@ -187,7 +196,13 @@ function patchLog(date, habitId, patch, meta = {}) {
 async function toggle(date, habitObj, payload, scope = "all", meta = {}) {
     const d = date ?? getTodayJstISO();
     const habitId = habitObj.id;
-    const key = keyOf(d, habitId);
+    const habitTimeId = resolveHabitTimeId(habitObj);
+
+    if (!habitTimeId) {
+        throw new Error("habit_time_id is required for toggle");
+    }
+
+    const key = keyOf(d, habitTimeId);
 
     const v = (requestVersion.get(key) ?? 0) + 1;
     requestVersion.set(key, v);
@@ -195,21 +210,34 @@ async function toggle(date, habitObj, payload, scope = "all", meta = {}) {
     const beforeObj = state.logsByKey.get(key) ?? null;
     const before = beforeObj ? { ...beforeObj } : null;
 
+    // --------
     // optimistic（ここでUIは即反映される）
+    // SELF の場合、rating が無い payload でも status から 0/4 を補完して “一瞬未完” を防ぐ
+    // --------
+    const hasRatingInPayload = Object.prototype.hasOwnProperty.call(
+        payload ?? {},
+        "rating"
+    );
+
+    let optimisticRating;
+    if (hasRatingInPayload) {
+        optimisticRating = normalizeRatingMaybe(payload.rating);
+    } else if (isSelfEval(habitObj)) {
+        optimisticRating = payload?.status === "done" ? 4 : 0;
+    } else {
+        optimisticRating = null; // SIMPLEは常にnullでOK
+    }
+
     patchLog(
         d,
-        habitId,
+        habitTimeId,
         {
             habit_id: habitId,
-            // time_slot は属性として保持（habit側の現在slotを優先）
+            habit_time_id: habitTimeId,
+            // time_slot は属性として保持（habit_timeの現在slotを優先）
             time_slot: Number(habitObj?.time_slot ?? beforeObj?.time_slot ?? 0),
             status: payload.status,
-            rating: Object.prototype.hasOwnProperty.call(
-                payload ?? {},
-                "rating"
-            )
-                ? normalizeRatingMaybe(payload.rating)
-                : null,
+            rating: optimisticRating,
             checked_at: new Date().toISOString(),
         },
         { phase: "optimistic", ...meta }
@@ -218,6 +246,7 @@ async function toggle(date, habitObj, payload, scope = "all", meta = {}) {
     try {
         const { data } = await api.post(`/habits/${habitId}/toggle`, {
             ...payload,
+            habit_time_id: habitTimeId,
             date: d,
             scope,
         });
@@ -230,10 +259,11 @@ async function toggle(date, habitObj, payload, scope = "all", meta = {}) {
         if (log) {
             patchLog(
                 d,
-                habitId,
+                habitTimeId,
                 {
                     id: log.id,
                     habit_id: log.habit_id ?? habitId,
+                    habit_time_id: log.habit_time_id ?? habitTimeId,
                     time_slot: Number(
                         log.time_slot ?? habitObj?.time_slot ?? 0
                     ),
@@ -251,11 +281,11 @@ async function toggle(date, habitObj, payload, scope = "all", meta = {}) {
 
         // rollback
         if (before && Object.keys(before).length) {
-            patchLog(d, habitId, before, { phase: "rollback", ...meta });
+            patchLog(d, habitTimeId, before, { phase: "rollback", ...meta });
         } else {
             patchLog(
                 d,
-                habitId,
+                habitTimeId,
                 { status: "none", rating: null },
                 { phase: "rollback", ...meta }
             );

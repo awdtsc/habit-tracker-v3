@@ -18,7 +18,7 @@ function onUpdate(payload) {
   <section class="today-section next-slot">
     <HabitRow
       v-for="h in habits"
-      :key="h.id"
+      :key="h.habit_time_id ?? h.id"
       :habit="h"
       :log="h.log"
       :today="today"

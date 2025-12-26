@@ -10,6 +10,7 @@ use Carbon\Carbon;
 
 use App\Models\Habit;
 use App\Models\HabitLog;
+use App\Models\HabitTime;
 
 class WeekController extends Controller
 {
@@ -32,26 +33,38 @@ class WeekController extends Controller
         $weekStart = $base->copy()->startOfWeek(Carbon::MONDAY)->startOfDay();
         $weekEnd   = $weekStart->copy()->addDays(6)->endOfDay();
 
-        $habits = Habit::query()
-            ->where('user_id', $userId)
-            ->where('archived', false)
+        $habitTimes = HabitTime::query()
+            ->whereHas('habit', function ($query) use ($userId) {
+                $query->where('user_id', $userId)
+                    ->where('archived', false);
+            })
+            ->with('habit')
             ->orderBy('time_slot')
             ->orderBy('id')
             ->get();
 
-        $logs = HabitLog::query()
-            ->where('user_id', $userId)
-            ->whereIn('habit_id', $habits->pluck('id')->all())
-            ->whereDate('date', '>=', $weekStart->toDateString())
-            ->whereDate('date', '<=', $weekEnd->toDateString())
-            ->orderBy('checked_at', 'desc')
-            ->get();
+        $habitTimeIds = $habitTimes->pluck('id')->all();
 
-        // ★同一性は habit_id + date（その日の最新 checked_at を真実とする）
+        // ★重要：habitTime が 0 件のとき、whereIn を省略すると「その週の全ログ」を拾ってしまう。
+        // 期待値は「0件ならログも空」なので、明示的に空コレクションにする。
+        if (empty($habitTimeIds)) {
+            $logs = collect();
+        } else {
+            $logs = HabitLog::query()
+                ->where('user_id', $userId)
+                ->whereIn('habit_time_id', $habitTimeIds)
+                ->whereDate('date', '>=', $weekStart->toDateString())
+                ->whereDate('date', '<=', $weekEnd->toDateString())
+                ->orderBy('checked_at', 'desc')
+                ->orderBy('id', 'desc') // 同時刻の安定化
+                ->get();
+        }
+
+        // ★同一性は habit_time_id + date（その日の最新 checked_at を真実とする）
         $map = [];
         foreach ($logs as $log) {
             $dateStr = $this->toDateString($log->date);
-            $k = $this->keyLoose((int)$log->habit_id, $dateStr);
+            $k = $this->keyStrict((int) $log->habit_time_id, $dateStr);
             if (!isset($map[$k])) {
                 $map[$k] = $log;
             }
@@ -70,35 +83,38 @@ class WeekController extends Controller
             $done = 0;
             $total = 0;
 
-            foreach ($habits as $habit) {
-                if (!$this->isHabitScheduledOn($habit, $isoWeekday)) {
+            foreach ($habitTimes as $habitTime) {
+                $habit = $habitTime->habit;
+                if (!$habit || !$this->isHabitScheduledOn($habit, $isoWeekday)) {
                     continue;
                 }
 
-                $k = $this->keyLoose((int)$habit->id, $dateStr);
+                $k = $this->keyStrict((int) $habitTime->id, $dateStr);
                 $log = $map[$k] ?? null;
 
                 $logPayload = null;
                 if ($log) {
                     $logPayload = [
-                        'id'         => $log->id,
-                        'habit_id'   => (int)$log->habit_id,
-                        'time_slot'  => (int)($log->time_slot ?? 0),
-                        'status'     => $log->status,
-                        'rating'     => $log->rating,
-                        'checked_at' => $log->checked_at,
+                        'id'            => $log->id,
+                        'habit_id'      => (int) $log->habit_id,
+                        'habit_time_id' => (int) $log->habit_time_id,
+                        'time_slot'     => (int) ($log->time_slot ?? $habitTime->time_slot ?? 0),
+                        'status'        => $log->status,
+                        'rating'        => $log->rating,
+                        'checked_at'    => $log->checked_at,
                     ];
                 }
 
                 $item = [
                     'id'              => $habit->id,
+                    'habit_time_id'   => $habitTime->id,
                     'title'           => $habit->title,
                     'description'     => $habit->description,
-                    'time_slot'       => (int)($habit->time_slot ?? 0),
+                    'time_slot'       => (int) ($habitTime->time_slot ?? 0),
                     'evaluation_type' => $habit->evaluation_type,
                     'target_times'    => $this->normalizeJson($habit->target_times),
                     'days_of_week'    => $this->normalizeJsonArray($habit->days_of_week),
-                    'archived'        => (bool)$habit->archived,
+                    'archived'        => (bool) $habit->archived,
                     'log'             => $logPayload,
                 ];
 
@@ -112,7 +128,7 @@ class WeekController extends Controller
                 }
             }
 
-            $percent = $total === 0 ? 0 : (int)round($done / $total * 100);
+            $percent = $total === 0 ? 0 : (int) round($done / $total * 100);
 
             $days[] = [
                 'date'    => $dateStr,
@@ -130,7 +146,7 @@ class WeekController extends Controller
             $weeklyTotal += $total;
         }
 
-        $weeklyPercent = $weeklyTotal === 0 ? 0 : (int)round($weeklyDone / $weeklyTotal * 100);
+        $weeklyPercent = $weeklyTotal === 0 ? 0 : (int) round($weeklyDone / $weeklyTotal * 100);
 
         $payload = [
             'week_start' => $weekStart->toDateString(),
@@ -151,7 +167,7 @@ class WeekController extends Controller
                 $dbName = 'unknown';
             }
 
-            $exampleLoose  = $this->keyLoose(1, '2025-12-19');
+            $exampleStrict  = $this->keyStrict(1, '2025-12-19');
 
             $payload['_debug'] = [
                 'auth_user_id' => $userId,
@@ -160,17 +176,18 @@ class WeekController extends Controller
                     'database' => $dbName,
                 ],
                 'range' => [$weekStart->toDateString(), $weekEnd->toDateString()],
-                'habits_count' => $habits->count(),
+                'habit_times_count' => $habitTimes->count(),
                 'logs_found' => $logs->count(),
                 'example_keys' => [
-                    'loose'  => $exampleLoose,
-                    'loose_hit'  => isset($map[$exampleLoose]),
+                    'strict'  => $exampleStrict,
+                    'strict_hit'  => isset($map[$exampleStrict]),
                 ],
                 'first_log' => $logs->first() ? [
                     'id' => $logs->first()->id,
-                    'habit_id' => (int)$logs->first()->habit_id,
+                    'habit_id' => (int) $logs->first()->habit_id,
+                    'habit_time_id' => (int) $logs->first()->habit_time_id,
                     'date' => $this->toDateString($logs->first()->date),
-                    'time_slot' => (int)($logs->first()->time_slot ?? 0),
+                    'time_slot' => (int) ($logs->first()->time_slot ?? 0),
                     'status' => $logs->first()->status,
                     'rating' => $logs->first()->rating,
                 ] : null,
@@ -185,7 +202,7 @@ class WeekController extends Controller
         if (!$log) return false;
 
         if ($evaluationType === 'self') {
-            return ((int)($log->rating ?? -1) === 4);
+            return ((int) ($log->rating ?? -1) === 4);
         }
         return ($log->status === 'done');
     }
@@ -195,18 +212,18 @@ class WeekController extends Controller
         if ($value instanceof \DateTimeInterface) {
             return Carbon::instance($value)->toDateString();
         }
-        return (string)$value;
+        return (string) $value;
     }
 
-    private function keyLoose(int $habitId, string $date): string
+    private function keyStrict(int $habitTimeId, string $date): string
     {
-        return $habitId . '|' . $date;
+        return $habitTimeId . '|' . $date;
     }
 
     private function normalizeJson($value)
     {
         if (is_array($value)) return $value;
-        if (is_object($value)) return (array)$value;
+        if (is_object($value)) return (array) $value;
         if (is_string($value) && $value !== '') {
             $decoded = json_decode($value, true);
             return is_array($decoded) ? $decoded : null;

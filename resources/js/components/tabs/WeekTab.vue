@@ -48,8 +48,10 @@ const { loading, hasLoaded, errorMessage, week, fetchWeek } = useWeekLoader();
   Range Label
 ------------------------------ */
 const rangeLabel = computed(() => {
-  if (!week.value.week_start || !week.value.week_end) return "—";
-  return `${formatMMDD(week.value.week_start)} 〜 ${formatMMDD(week.value.week_end)}`;
+  if (!week.value?.week_start || !week.value?.week_end) return "—";
+  return `${formatMMDD(week.value.week_start)} 〜 ${formatMMDD(
+    week.value.week_end
+  )}`;
 });
 
 /* ------------------------------
@@ -61,21 +63,20 @@ const inflight = ref(false);
 async function loadWeek(weekStart) {
   if (!weekStart) return;
 
-  // 同じ週を連打しても fetch しない
+  // 同一weekはスキップ
   if (lastRequestedWeek.value === weekStart) return;
 
-  // in-flight中は「最後に要求された週」だけに寄せる
+  // “次に欲しい週” を記録
   lastRequestedWeek.value = weekStart;
+
+  // 既に飛行中なら、飛行中ループが lastRequestedWeek を見て追従する
   if (inflight.value) return;
 
   inflight.value = true;
   try {
-    // ここで lastRequestedWeek が変わる可能性があるのでループで吸収
     while (true) {
       const target = lastRequestedWeek.value;
       await fetchWeek(target);
-
-      // fetch中に別週が要求されていなければ終了
       if (lastRequestedWeek.value === target) break;
     }
   } finally {
@@ -84,18 +85,17 @@ async function loadWeek(weekStart) {
 }
 
 async function syncQuery(weekStart) {
-  // query更新だけ。fetchはwatch側の単一入口で行う
   await router.replace({ query: { ...route.query, week: weekStart } });
 }
 
 async function goPrevWeek() {
-  const base = week.value.week_start || getWeekStartISO();
+  const base = week.value?.week_start || getWeekStartISO();
   const prev = addDaysISO(base, -7);
   await syncQuery(prev);
 }
 
 async function goNextWeek() {
-  const base = week.value.week_start || getWeekStartISO();
+  const base = week.value?.week_start || getWeekStartISO();
   const next = addDaysISO(base, 7);
   await syncQuery(next);
 }
@@ -105,21 +105,35 @@ async function goNextWeek() {
   ★SELFは rating が真実（rating===4 のみ done）
 ------------------------------ */
 function isDoneForCount(h) {
-  const type = h.evaluation_type;
-  const status = h.log?.status ?? "none";
-  const rating = h.log?.rating ?? null;
+  const type = h?.evaluation_type ?? "simple";
+  const status = h?.log?.status ?? "none";
+  const rating = h?.log?.rating ?? null;
 
   if (type === "self") return Number(rating ?? 0) === 4;
   return status === "done";
 }
 
+function ensureWeekShape() {
+  if (!week.value) {
+    week.value = { days: [], weekly_progress: { done: 0, total: 0, percent: 0 } };
+    return;
+  }
+  if (!Array.isArray(week.value.days)) week.value.days = [];
+  if (!week.value.weekly_progress) {
+    week.value.weekly_progress = { done: 0, total: 0, percent: 0 };
+  }
+}
+
 function recalcProgress() {
+  ensureWeekShape();
+
   let wDone = 0;
   let wTotal = 0;
 
   for (const d of week.value.days ?? []) {
-    const total = d.habits?.length ?? 0;
-    const done = (d.habits ?? []).filter(isDoneForCount).length;
+    const list = Array.isArray(d.habits) ? d.habits : [];
+    const total = list.length;
+    const done = list.filter(isDoneForCount).length;
 
     d.progress = {
       done,
@@ -146,14 +160,15 @@ const owner = logStore.createOwner();
 let unsub = null;
 
 function hasDateInWeek(date) {
-  return (week.value.days ?? []).some((d) => d.date === date);
+  const days = week.value?.days ?? [];
+  return Array.isArray(days) && days.some((d) => d.date === date);
 }
 
 watch(
-  () => week.value.days,
+  () => week.value?.days,
   (days) => {
     logStore.detachOwner(owner);
-    if (days?.length) logStore.attachWeek(owner, days);
+    if (Array.isArray(days) && days.length) logStore.attachWeek(owner, days);
     recalcProgress();
   },
   { immediate: true }
@@ -162,6 +177,7 @@ watch(
 onMounted(() => {
   unsub = logStore.subscribe((evt) => {
     if (!hasLoaded.value) return;
+    if (!evt?.date) return;
     if (!hasDateInWeek(evt.date)) return;
     recalcProgress();
   });
@@ -174,39 +190,58 @@ onUnmounted(() => {
 
 /* ------------------------------
   Toggle（ユーザー操作）
-  ★SELFは rating 主導で status を決める（真実を壊さない入口）
+  - WeekGrid/WeekDayColumn は { date, habit } を投げてくる前提
+  - habit.habit_time_id / habit.time_slot をそのまま使う
+  - ★SELFは rating 主導で status を決める（真実を壊さない入口）
 ------------------------------ */
+function resolveSlotForToggle(habit) {
+  // 優先: habit.time_slot -> log.time_slot -> 0
+  if (Object.prototype.hasOwnProperty.call(habit ?? {}, "time_slot")) {
+    return Number(habit?.time_slot ?? 0);
+  }
+  if (habit?.log && Object.prototype.hasOwnProperty.call(habit.log, "time_slot")) {
+    return Number(habit.log.time_slot ?? 0);
+  }
+  return 0;
+}
+
 async function onToggle({ date, habit }) {
-  const isSelf = habit.evaluation_type === "self";
+  if (!date || !habit) return;
+
+  const isSelf = (habit?.evaluation_type ?? "simple") === "self";
 
   let nextStatus = "none";
   let nextRating = null;
 
   if (isSelf) {
-    const curRating = Number(habit.log?.rating ?? 0);
+    const curRating = Number(habit?.log?.rating ?? 0);
     nextRating = curRating === 4 ? 0 : 4;
     nextStatus = nextRating === 4 ? "done" : "none";
   } else {
-    const curStatus = habit.log?.status ?? "none";
+    const curStatus = habit?.log?.status ?? "none";
     nextStatus = curStatus === "done" ? "none" : "done";
     nextRating = null;
   }
 
+  const slot = resolveSlotForToggle(habit);
+
+  // ★重要：store の optimistic が habitObj.time_slot を参照するので、slot を確定させて渡す
+  const habitForToggle = { ...habit, time_slot: slot };
+
   const p = logStore.toggle(
     date,
-    habit,
+    habitForToggle,
     { status: nextStatus, rating: nextRating },
     "all",
-    { source: "week" }
+    { source: "week", time_slot: slot }
   );
 
-  // optimistic反映済みなので即再計算
+  // 即時反映（optimistic後の値で再計算）
   recalcProgress();
 
   try {
     await p;
   } finally {
-    // 成功でも失敗でも、最終状態で再計算（store側ロールバックも吸収）
     recalcProgress();
   }
 }
@@ -219,7 +254,6 @@ onMounted(async () => {
   const initial = qsWeek || getWeekStartISO();
   await loadWeek(initial);
 
-  // 初回に query.week が無いなら、URLも揃える（任意だけどデバッグが楽）
   if (!qsWeek) {
     await syncQuery(initial);
   }
@@ -229,7 +263,7 @@ watch(
   () => route.query.week,
   async (v) => {
     const next = typeof v === "string" && v ? v : getWeekStartISO();
-    if (next !== week.value.week_start) {
+    if (next !== week.value?.week_start) {
       await loadWeek(next);
     }
   }

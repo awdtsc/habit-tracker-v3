@@ -1,3 +1,4 @@
+<!-- resources/js/components/week/WeekDayColumn.vue -->
 <template>
   <div class="border-t md:border-t-0 md:border-l first:border-l-0">
     <!-- day header -->
@@ -10,7 +11,7 @@
     <div class="p-2 space-y-2">
       <button
         v-for="h in day.habits"
-        :key="h.id"
+        :key="h.habit_time_id ?? h.id"
         type="button"
         class="w-full text-left rounded-xl border px-3 py-3 transition-colors"
         :class="rowClass(h)"
@@ -31,7 +32,15 @@ const props = defineProps({
 
 const emit = defineEmits(["toggle"]);
 
+function resolveHabitTimeId(h) {
+  return h?.habit_time_id ?? h?.log?.habit_time_id ?? null;
+}
+
 function emitToggle(habit) {
+  // 安全策：同一性の軸が無いデータは押せないようにする
+  const habitTimeId = resolveHabitTimeId(habit);
+  if (!habitTimeId) return;
+
   emit("toggle", { date: props.day.date, habit });
 }
 
@@ -41,11 +50,10 @@ function emitToggle(habit) {
  * - self  : rating が真実（rating===4 のみ done）
  */
 function isDone(h) {
-  const type = h.evaluation_type;
-  const status = h.log?.status ?? "none";
-  const rating = h.log?.rating ?? null;
+  const type = h?.evaluation_type ?? "simple";
+  const status = h?.log?.status ?? "none";
+  const rating = h?.log?.rating ?? null;
 
-  // ★真実仕様
   if (type === "self") return Number(rating ?? 0) === 4;
   return status === "done";
 }

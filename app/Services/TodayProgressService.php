@@ -5,10 +5,17 @@ namespace App\Services;
 
 use App\Models\Habit;
 use App\Models\HabitLog;
+use App\Models\HabitTime;
 use Carbon\Carbon;
 
 class TodayProgressService
 {
+    /**
+     * 同一リクエスト内の重複計算を避けるキャッシュ
+     * key: "{$userId}|{$date}"
+     */
+    private array $allScopesCache = [];
+
     /**
      * 今日/任意日付の progress を「唯一の真実」として計算する（互換維持）
      * - スケジュール(days_of_week)を考慮
@@ -17,14 +24,13 @@ class TodayProgressService
      *   - simple: status === done
      *   - self  : rating === 4 のみ
      *
-     * ※内部的には calculateAllScopes() を使い、DB取得は1回にまとめる
+     * ※内部的には calculateAllScopes() を使う（同一リクエスト内はキャッシュ）
      */
     public function calculate(int $userId, string $date, string $scope = 'all'): array
     {
         $all = $this->calculateAllScopes($userId, $date);
 
         if (!isset($all[$scope])) {
-            // 不正scopeはallにフォールバック
             $scope = 'all';
         }
 
@@ -37,36 +43,21 @@ class TodayProgressService
     }
 
     /**
-     * B-1用：全スコープのprogressを「1回のDB取得」でまとめて計算する
-     *
-     * 返り値例:
-     * [
-     *   'all'     => ['done'=>3,'total'=>8,'percent'=>38],
-     *   'morning' => ['done'=>1,'total'=>2,'percent'=>50],
-     *   'day'     => ['done'=>0,'total'=>1,'percent'=>0],
-     *   'evening' => ['done'=>2,'total'=>3,'percent'=>67],
-     *   'night'   => ['done'=>0,'total'=>2,'percent'=>0],
-     * ]
+     * B-1用：全スコープのprogressをまとめて計算する
      *
      * NOTE:
-     * - 現在の仕様どおり、anytime(0)は all には含めるが、morning/day/evening/night には含めない
+     * - anytime(0)は all には含めるが、morning/day/evening/night には含めない
      * - days_of_week が空なら毎日対象
      */
     public function calculateAllScopes(int $userId, string $date): array
     {
+        $cacheKey = $userId . '|' . $date;
+        if (isset($this->allScopesCache[$cacheKey])) {
+            return $this->allScopesCache[$cacheKey];
+        }
+
         $tz = 'Asia/Tokyo';
         $isoWeekday = Carbon::parse($date, $tz)->isoWeekday(); // 1..7
-
-        // 1) 今日やる対象の習慣（未アーカイブ + 曜日フィルタ）
-        $habits = Habit::where('user_id', $userId)
-            ->where('archived', false)
-            ->orderBy('time_slot')
-            ->orderBy('id')
-            ->get()
-            ->filter(fn (Habit $h) => $this->isHabitScheduledOn($h, $isoWeekday))
-            ->values();
-
-        $habitIds = $habits->pluck('id')->all();
 
         // 初期（total=0のスコープも必ず返す）
         $scopes = ['all', 'morning', 'day', 'evening', 'night'];
@@ -75,26 +66,46 @@ class TodayProgressService
             $counts[$s] = ['done' => 0, 'total' => 0, 'percent' => 0];
         }
 
-        if (count($habitIds) === 0) {
-            return $counts;
+        // 1) 対象 habit_times（未アーカイブ + 曜日フィルタ）
+        $habitTimes = HabitTime::query()
+            ->whereHas('habit', function ($query) use ($userId) {
+                $query->where('user_id', $userId)
+                    ->where('archived', false);
+            })
+            ->with('habit')
+            ->orderBy('time_slot')
+            ->orderBy('id')
+            ->get()
+            ->filter(fn (HabitTime $t) => $t->habit && $this->isHabitScheduledOn($t->habit, $isoWeekday))
+            ->values();
+
+        $habitTimeIds = $habitTimes->pluck('id')->all();
+
+        if (count($habitTimeIds) === 0) {
+            return $this->allScopesCache[$cacheKey] = $counts;
         }
 
-        // 2) 当日のログを habit_id ごとに「最新1件」に潰す（checked_at desc）
-        $logsByHabit = HabitLog::where('user_id', $userId)
-            ->where('date', $date)
-            ->whereIn('habit_id', $habitIds)
+        // 2) 当日のログを habit_time_id ごとに「最新1件」に潰す
+        //    checked_at desc（同時刻は id desc）で安定化
+        $logsByHabitTime = HabitLog::query()
+            ->where('user_id', $userId)
+            ->whereDate('date', $date)
+            ->whereIn('habit_time_id', $habitTimeIds)
             ->orderBy('checked_at', 'desc')
+            ->orderBy('id', 'desc')
             ->get()
-            ->groupBy('habit_id')
+            ->groupBy('habit_time_id')
             ->map(fn ($g) => $g->first());
 
         // 3) 1回の走査で all + 各slotのtotal/done を積む
-        foreach ($habits as $habit) {
-            $slot = (int) ($habit->time_slot ?? 0);
-            $log  = $logsByHabit->get($habit->id);
-            $isDone = $this->isDoneForHabit($habit, $log);
+        foreach ($habitTimes as $habitTime) {
+            $slot  = (int) ($habitTime->time_slot ?? 0);
+            $habit = $habitTime->habit;
 
-            // all
+            $log   = $logsByHabitTime->get($habitTime->id);
+            $isDone = $habit ? $this->isDoneForHabit($habit, $log) : false;
+
+            // all（anytime含む）
             $counts['all']['total']++;
             if ($isDone) $counts['all']['done']++;
 
@@ -108,12 +119,12 @@ class TodayProgressService
 
         // 4) percent を確定
         foreach ($scopes as $s) {
-            $total = $counts[$s]['total'];
-            $done  = $counts[$s]['done'];
+            $total = (int) $counts[$s]['total'];
+            $done  = (int) $counts[$s]['done'];
             $counts[$s]['percent'] = ($total === 0) ? 0 : (int) round($done / $total * 100);
         }
 
-        return $counts;
+        return $this->allScopesCache[$cacheKey] = $counts;
     }
 
     private function isDoneForHabit(Habit $habit, ?HabitLog $log): bool
@@ -121,7 +132,7 @@ class TodayProgressService
         if (!$log) return false;
 
         if (($habit->evaluation_type ?? 'simple') === 'self') {
-            return ((int)($log->rating ?? -1) === 4); // ★SELFはratingのみ
+            return ((int) ($log->rating ?? -1) === 4); // ★SELFはratingのみ
         }
         return (($log->status ?? 'none') === 'done');
     }
@@ -133,7 +144,7 @@ class TodayProgressService
             2 => 'day',
             3 => 'evening',
             4 => 'night',
-            default => null, // 0(anytime) や不正値は null
+            default => null,
         };
     }
 

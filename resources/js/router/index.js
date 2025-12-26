@@ -55,6 +55,14 @@ const routes = [
         meta: { requiresAuth: true },
     },
 
+    // ★ NEW: habit create form (SPA)
+    {
+        path: "/habits/new",
+        name: "habits.new",
+        component: () => import("../Pages/Habits/New.vue"),
+        meta: { requiresAuth: true },
+    },
+
     {
         path: "/logout",
         name: "logout",

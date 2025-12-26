@@ -7,6 +7,7 @@ use App\Http\Controllers\Auth\ApiAuthController;
 use App\Http\Controllers\TodayController;
 use App\Http\Controllers\HabitLogController;
 use App\Http\Controllers\WeekController;
+use App\Http\Controllers\HabitController; // ★追加（場所はここでOK）
 
 /*
 |--------------------------------------------------------------------------
@@ -57,12 +58,17 @@ Route::middleware('web')->group(function () {
 
         /*
         |--------------------------------------------------------------------------
+        | Habits（作成など）
+        |--------------------------------------------------------------------------
+        */
+        Route::post('/api/habits', [HabitController::class, 'store']); // ★追加（これが欲しかったやつ）
+
+        /*
+        |--------------------------------------------------------------------------
         | Habit Logs：トグル・評価更新（v3 統一仕様）
         |--------------------------------------------------------------------------
         */
         Route::post('/api/habits/{habit}/toggle', [HabitLogController::class, 'toggle']);
-        // 将来の self-rating などもここに追加可能
-        // Route::post('/api/habits/{habit}/rate',   [HabitLogController::class, 'rate']);
     });
 });
 

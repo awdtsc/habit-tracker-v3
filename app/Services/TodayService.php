@@ -5,6 +5,7 @@ namespace App\Services;
 
 use App\Models\Habit;
 use App\Models\HabitLog;
+use App\Models\HabitTime;
 use Carbon\Carbon;
 use Illuminate\Support\Collection;
 
@@ -25,39 +26,56 @@ class TodayService
         $nowSlot  = $this->detectNowSlot($now);
         $nextSlot = $this->detectNextSlot($nowSlot);
 
-        // ★曜日スケジュールで「今日やる習慣」だけ
-        $habits = Habit::where('user_id', $userId)
-            ->where('archived', false)
+        $habitTimes = HabitTime::query()
+            ->whereHas('habit', function ($query) use ($userId) {
+                $query->where('user_id', $userId)
+                    ->where('archived', false);
+            })
+            ->with('habit')
             ->orderBy('time_slot')
             ->orderBy('id')
             ->get()
-            ->filter(fn (Habit $h) => $this->isHabitScheduledOn($h, $isoWeekday))
+            ->filter(fn (HabitTime $t) => $t->habit && $this->isHabitScheduledOn($t->habit, $isoWeekday))
             ->values();
 
-        /**
-         * ★重要：履歴を残す設計なので「最新1件」を確実に取る
-         * checked_at desc で並べて groupBy -> first が最新
-         */
-        $logsByHabit = HabitLog::where('user_id', $userId)
-            ->where('date', $today)
-            ->orderBy('checked_at', 'desc')
-            ->get()
-            ->groupBy('habit_id');
+        $habitTimeIds = $habitTimes->pluck('id')->all();
 
-        $items = $habits->map(function (Habit $habit) use ($logsByHabit, $nowSlot) {
-            $log = optional($logsByHabit->get($habit->id))->first();
-            $logArr = $this->formatLog($log);
+        /**
+         * ★同一性は (user_id, habit_time_id, date) の 1 行
+         * ＝「最終状態 + checked_at」が真実。よって habit_time_id ごとに最新 1 件を使う。
+         *
+         * ※重要：habitTimeIds が空のとき whereIn を省略すると「今日の全ログ」を拾うので必ず空にする。
+         */
+        if (empty($habitTimeIds)) {
+            $logsByHabitTime = collect();
+        } else {
+            $logsByHabitTime = HabitLog::query()
+                ->where('user_id', $userId)
+                ->whereDate('date', $today)
+                ->whereIn('habit_time_id', $habitTimeIds)
+                ->orderBy('checked_at', 'desc')
+                ->orderBy('id', 'desc') // 同時刻の安定化
+                ->get()
+                ->groupBy('habit_time_id');
+        }
+
+        $items = $habitTimes->map(function (HabitTime $habitTime) use ($logsByHabitTime, $nowSlot) {
+            $habit = $habitTime->habit;
+
+            $log = optional($logsByHabitTime->get($habitTime->id))->first();
+            $logArr = $this->formatLog($log, $habitTime);
 
             return [
                 'id'              => $habit->id,
+                'habit_time_id'   => $habitTime->id,
                 'title'           => $habit->title,
-                'time_slot'       => (int) $habit->time_slot,
+                'time_slot'       => (int) $habitTime->time_slot,
                 'evaluation_type' => $habit->evaluation_type,
                 'log'             => $logArr,
 
-                'actionable'      => $this->isActionable($habit, $logArr, $nowSlot),
-                'next_slot'       => $this->calcNextSlot($habit),
-                'anytime'         => ((int) $habit->time_slot === 0),
+                'actionable'      => $this->isActionable($habitTime, $logArr, $nowSlot),
+                'next_slot'       => $this->calcNextSlot($habitTime),
+                'anytime'         => ((int) $habitTime->time_slot === 0),
             ];
         });
 
@@ -109,7 +127,7 @@ class TodayService
 
         foreach ($items as $it) {
             $done = $this->isDoneItem($it);
-            $slot = (int)($it['time_slot'] ?? 0);
+            $slot = (int) ($it['time_slot'] ?? 0);
 
             // all（anytime含む）
             $out['all']['total']++;
@@ -130,8 +148,8 @@ class TodayService
         }
 
         foreach ($out as $k => $p) {
-            $total = (int)($p['total'] ?? 0);
-            $done  = (int)($p['done'] ?? 0);
+            $total = (int) ($p['total'] ?? 0);
+            $done  = (int) ($p['done'] ?? 0);
             $out[$k]['percent'] = $total === 0 ? 0 : (int) round($done / $total * 100);
         }
 
@@ -165,14 +183,14 @@ class TodayService
         $pending = $items->filter(fn ($it) => !$this->isDoneItem($it));
         if ($pending->isEmpty()) return null;
 
-        $slotMatch = $pending->first(fn ($it) => (int)$it['time_slot'] === $nowSlot);
+        $slotMatch = $pending->first(fn ($it) => (int) $it['time_slot'] === $nowSlot);
         if ($slotMatch) return $this->formatPick($slotMatch, 'slot_match');
 
-        $future = $pending->filter(fn ($it) => (int)$it['time_slot'] > $nowSlot && (int)$it['time_slot'] !== 0)
+        $future = $pending->filter(fn ($it) => (int) $it['time_slot'] > $nowSlot && (int) $it['time_slot'] !== 0)
             ->sortBy('time_slot')->first();
         if ($future) return $this->formatPick($future, 'future_slot');
 
-        $any = $pending->first(fn ($it) => (int)$it['time_slot'] === 0);
+        $any = $pending->first(fn ($it) => (int) $it['time_slot'] === 0);
         if ($any) return $this->formatPick($any, 'anytime');
 
         return $this->formatPick($pending->first(), 'fallback');
@@ -181,48 +199,54 @@ class TodayService
     private function formatPick(array $item, string $reason): array
     {
         return [
-            'habit_id'  => $item['id'],
-            'title'     => $item['title'],
-            'time_slot' => $item['time_slot'],
-            'reason'    => $reason,
+            'habit_id'      => $item['id'],
+            'habit_time_id' => $item['habit_time_id'],
+            'title'         => $item['title'],
+            'time_slot'     => $item['time_slot'],
+            'reason'        => $reason,
         ];
     }
 
-    private function formatLog(?HabitLog $log): array
+    private function formatLog(?HabitLog $log, HabitTime $habitTime): array
     {
         if (!$log) {
             return [
-                'status'     => 'none',
-                'rating'     => null,
-                'checked_at' => null,
+                'habit_id'      => $habitTime->habit_id,
+                'habit_time_id' => $habitTime->id,
+                'status'        => 'none',
+                'rating'        => null,
+                'checked_at'    => null,
             ];
         }
 
         return [
-            'id'         => $log->id,
-            'status'     => $log->status,
-            'rating'     => $log->rating,
-            'checked_at' => $log->checked_at,
+            'id'            => $log->id,
+            'habit_id'      => $log->habit_id,
+            'habit_time_id' => $log->habit_time_id,
+            'status'        => $log->status,
+            'rating'        => $log->rating,
+            'checked_at'    => $log->checked_at,
         ];
     }
 
-    private function isActionable(Habit $habit, array $logArr, int $nowSlot): bool
+    private function isActionable(HabitTime $habitTime, array $logArr, int $nowSlot): bool
     {
-        if ($habit->evaluation_type === 'self') {
+        $type = $habitTime->habit?->evaluation_type ?? 'simple';
+        if ($type === 'self') {
             if (($logArr['rating'] ?? null) === 4) return false;
         } else {
             if (($logArr['status'] ?? 'none') === 'done') return false;
         }
 
-        $slot = (int) $habit->time_slot;
+        $slot = (int) $habitTime->time_slot;
         if ($slot === 0) return false;
 
         return $slot <= $nowSlot;
     }
 
-    private function calcNextSlot(Habit $habit): ?int
+    private function calcNextSlot(HabitTime $habitTime): ?int
     {
-        $slot = (int) $habit->time_slot;
+        $slot = (int) $habitTime->time_slot;
         if ($slot === 0 || $slot >= 4) return null;
         return $slot + 1;
     }

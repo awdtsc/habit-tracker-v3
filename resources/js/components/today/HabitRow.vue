@@ -14,11 +14,15 @@
         {{ goalText }}
       </div>
 
-      <!-- ★回数ベース進捗ゲージ（0/50/100...） -->
-      <div class="mt-2 h-2 w-40 rounded-full bg-gray-200 overflow-hidden">
+      <!-- SIMPLE（進捗ゲージ） -->
+      <div
+        v-if="!isSelf"
+        class="mt-2 h-2 w-40 rounded-full bg-gray-200 overflow-hidden"
+      >
         <div
-          class="h-full transition-all bg-green-500"
-          :style="{ width: dailyPct + '%' }"
+          class="h-full transition-all"
+          :class="barClass"
+          :style="{ width: barWidth }"
         ></div>
       </div>
     </div>
@@ -39,11 +43,8 @@
         </button>
       </div>
 
-      <!-- 状態ラベル（固定幅で揺れない） -->
-      <span
-        class="px-2 py-0.5 rounded-full text-xs w-16 text-center"
-        :class="statusBadgeClass"
-      >
+      <!-- 状態ラベル（固定幅） -->
+      <span class="px-2 py-0.5 rounded-full text-xs w-16 text-center" :class="statusBadgeClass">
         {{ statusLabel }}
       </span>
 
@@ -66,76 +67,66 @@ const props = defineProps({
   habit: { type: Object, required: true },
   log: { type: Object, required: true },
   today: { type: String, required: true },
-
-  // ★追加：その habit（id）に対する「今日の回数」と「今日の完了数」
-  // 例：歯磨き（朝/夜）なら total=2, done=0/1/2
-  dailyTotal: { type: Number, default: null },
-  dailyDone: { type: Number, default: null },
 });
 
 const emit = defineEmits(["update"]);
 
 /**
- * ★同期の肝（そのまま維持）
- * - props.log を真実として参照しつつ、クリック直後だけ pending を上書き表示して“止血”する
+ * クリック直後だけ pending を上書き表示して“止血”
  */
-const pending = ref(null); // { status?, rating? } 一時上書き
+const pending = ref(null); // { status?, rating? }
 
 const isSelf = computed(() => props.habit.evaluation_type === "self");
 
-const viewStatus = computed(() => {
-  return pending.value?.status ?? props.log.status ?? "none";
-});
-
+const viewStatus = computed(() => pending.value?.status ?? props.log.status ?? "none");
 const viewRating = computed(() => {
   const r = pending.value?.rating ?? props.log.rating ?? 0;
   return typeof r === "number" ? r : 0;
 });
 
-// 行の done 真実（SELFは rating===4）
+/**
+ * ★真実ルール
+ * - simple: status が真実
+ * - self  : rating===4 のみ done
+ */
 const isDone = computed(() => {
   if (isSelf.value) return viewRating.value === 4;
   return viewStatus.value === "done";
 });
 
-// ★ラベル：dailyTotal があればそれを出す（無ければ従来通り 1回）
-const goalText = computed(() => {
-  const t = Number(props.dailyTotal ?? 0);
-  return t >= 1 ? `${t}回` : "1回";
+/**
+ * ★同名グループ進捗（TodaySlotView が habit に daily_total/daily_done を付与）
+ */
+const groupTotal = computed(() => {
+  const n = Number(props.habit?.daily_total ?? 1);
+  return Number.isFinite(n) && n >= 1 ? n : 1;
+});
+const groupDone = computed(() => {
+  const n = Number(props.habit?.daily_done ?? (isDone.value ? 1 : 0));
+  if (!Number.isFinite(n)) return isDone.value ? 1 : 0;
+  return Math.max(0, Math.min(n, groupTotal.value));
 });
 
-/**
- * ★回数ベースの進捗（0/50/100…）
- * - props.dailyDone/props.dailyTotal を基本にする
- * - ただしクリック直後に bar も即反映させたいので、
- *   「この行のdone状態が pending で変わった差分」を done数に加算して一時補正する
- */
-function rowDoneFromLog(log, habit) {
-  const type = habit?.evaluation_type ?? "simple";
-  const status = log?.status ?? "none";
-  const rating = log?.rating ?? null;
-  if (type === "self") return Number(rating ?? 0) === 4;
-  return status === "done";
-}
+const goalText = computed(() => {
+  // 1回 → 2回（グループが2件以上なら）
+  return `${groupTotal.value}回`;
+});
 
-const dailyPct = computed(() => {
-  const total = Number(props.dailyTotal ?? 0);
+const groupPercent = computed(() => {
+  if (groupTotal.value <= 0) return 0;
+  return Math.round((groupDone.value / groupTotal.value) * 100);
+});
 
-  // 集計が来てない場合はフォールバック（行単体 0/100）
-  if (!total || total < 1) return isDone.value ? 100 : 0;
+const barWidth = computed(() => {
+  // 1件だけのときは従来通り 0/100
+  if (groupTotal.value === 1) return isDone.value ? "100%" : "0%";
+  // 2件なら 0/50/100 になる（done/total）
+  return `${groupPercent.value}%`;
+});
 
-  const baseDone = Number(props.dailyDone ?? 0);
-
-  // この行が “元々doneだったか” と “今の表示上doneか” の差分で補正
-  const before = rowDoneFromLog(props.log, props.habit) ? 1 : 0;
-  const after = isDone.value ? 1 : 0;
-  let effectiveDone = baseDone + (after - before);
-
-  // 安全に丸め
-  if (effectiveDone < 0) effectiveDone = 0;
-  if (effectiveDone > total) effectiveDone = total;
-
-  return Math.round((effectiveDone / total) * 100);
+const barClass = computed(() => {
+  // 常に緑（0%/50%/100% でも緑）
+  return "bg-green-500";
 });
 
 /**
@@ -168,17 +159,6 @@ const statusBadgeClass = computed(() => {
 });
 
 /* ----------------------------------------------------------
-   emit に共通で付ける（複数回の識別）
----------------------------------------------------------- */
-function baseMeta() {
-  return {
-    date: props.today,
-    habit_time_id: props.habit?.habit_time_id ?? null,
-    time_slot: props.habit?.time_slot ?? 0,
-  };
-}
-
-/* ----------------------------------------------------------
    完了ボタン
 ---------------------------------------------------------- */
 function toggleStatus() {
@@ -191,9 +171,9 @@ function toggleStatus() {
     emit("update", {
       habit: props.habit,
       payload: {
-        ...baseMeta(),
+        date: props.today,
         status: nextStatus,
-        rating: nextRating, // ★SELFは常に送る
+        rating: nextRating,
       },
     });
     return;
@@ -205,11 +185,7 @@ function toggleStatus() {
 
   emit("update", {
     habit: props.habit,
-    payload: {
-      ...baseMeta(),
-      status: nextStatus,
-      rating: null,
-    },
+    payload: { date: props.today, status: nextStatus, rating: null },
   });
 }
 
@@ -219,13 +195,12 @@ function toggleStatus() {
 function onSelectRating(n) {
   const nextStatus = n === 4 ? "done" : "none";
 
-  // ちらつき止血
   pending.value = { rating: n, status: nextStatus };
 
   emit("update", {
     habit: props.habit,
     payload: {
-      ...baseMeta(),
+      date: props.today,
       status: nextStatus,
       rating: n,
     },
@@ -236,7 +211,6 @@ function onSelectRating(n) {
    rating ボタンの色
 ---------------------------------------------------------- */
 function ratingButtonClass(n) {
-  // “現在のrating” を基準に塗る（pendingも反映）
   if (n <= viewRating.value) return "bg-blue-500 text-white";
   return "bg-gray-200 text-gray-500";
 }

@@ -14,6 +14,9 @@ import AppHeader from "@/components/layout/AppHeader.vue";
 import TodayTab from "@/components/tabs/TodayTab.vue";
 import { prefetchCurrentWeek } from "@/state/weekCache";
 
+// ★ KeepAlive include にマッチさせる
+defineOptions({ name: "TodayPage" });
+
 function idle(fn) {
   if ("requestIdleCallback" in window) {
     window.requestIdleCallback(() => fn());

@@ -27,7 +27,15 @@
 </template>
 
 <script setup>
-import { computed, onMounted, onUnmounted, watch, ref } from "vue";
+import {
+  computed,
+  onMounted,
+  onUnmounted,
+  onActivated,
+  onDeactivated,
+  watch,
+  ref,
+} from "vue";
 import { useRoute, useRouter } from "vue-router";
 
 import { useWeekLoader } from "@/composables/useWeekLoader";
@@ -41,6 +49,8 @@ import WeekProgressCard from "@/components/week/WeekProgressCard.vue";
 
 const route = useRoute();
 const router = useRouter();
+
+const isActive = ref(true);
 
 const { loading, hasLoaded, errorMessage, week, fetchWeek } = useWeekLoader();
 
@@ -60,7 +70,15 @@ const rangeLabel = computed(() => {
 const lastRequestedWeek = ref(null);
 const inflight = ref(false);
 
+function resolveWeekTarget(raw) {
+  if (typeof raw === "string" && raw) return raw;
+  // URLにweekが無い復帰時は「前回表示してた週」を維持
+  if (week.value?.week_start) return week.value.week_start;
+  return getWeekStartISO();
+}
+
 async function loadWeek(weekStart) {
+  if (!isActive.value) return;
   if (!weekStart) return;
 
   // 同一weekはスキップ
@@ -89,15 +107,17 @@ async function syncQuery(weekStart) {
 }
 
 async function goPrevWeek() {
-  const base = week.value?.week_start || getWeekStartISO();
+  const base = week.value?.week_start ?? resolveWeekTarget(route.query.week);
   const prev = addDaysISO(base, -7);
   await syncQuery(prev);
+  await loadWeek(prev);
 }
 
 async function goNextWeek() {
-  const base = week.value?.week_start || getWeekStartISO();
+  const base = week.value?.week_start ?? resolveWeekTarget(route.query.week);
   const next = addDaysISO(base, 7);
   await syncQuery(next);
+  await loadWeek(next);
 }
 
 /* ------------------------------
@@ -115,7 +135,10 @@ function isDoneForCount(h) {
 
 function ensureWeekShape() {
   if (!week.value) {
-    week.value = { days: [], weekly_progress: { done: 0, total: 0, percent: 0 } };
+    week.value = {
+      days: [],
+      weekly_progress: { done: 0, total: 0, percent: 0 },
+    };
     return;
   }
   if (!Array.isArray(week.value.days)) week.value.days = [];
@@ -167,6 +190,9 @@ function hasDateInWeek(date) {
 watch(
   () => week.value?.days,
   (days) => {
+    // 非アクティブ時は裏で attach/detach しない（タブ切替の体感改善）
+    if (!isActive.value) return;
+
     logStore.detachOwner(owner);
     if (Array.isArray(days) && days.length) logStore.attachWeek(owner, days);
     recalcProgress();
@@ -175,7 +201,10 @@ watch(
 );
 
 onMounted(() => {
+  // タブ切替で KeepAlive になると mount は1回だけ。
+  // activeガードを入れて、非表示時に無駄なrecalcが走らないようにする。
   unsub = logStore.subscribe((evt) => {
+    if (!isActive.value) return;
     if (!hasLoaded.value) return;
     if (!evt?.date) return;
     if (!hasDateInWeek(evt.date)) return;
@@ -199,7 +228,10 @@ function resolveSlotForToggle(habit) {
   if (Object.prototype.hasOwnProperty.call(habit ?? {}, "time_slot")) {
     return Number(habit?.time_slot ?? 0);
   }
-  if (habit?.log && Object.prototype.hasOwnProperty.call(habit.log, "time_slot")) {
+  if (
+    habit?.log &&
+    Object.prototype.hasOwnProperty.call(habit.log, "time_slot")
+  ) {
     return Number(habit.log.time_slot ?? 0);
   }
   return 0;
@@ -248,24 +280,62 @@ async function onToggle({ date, habit }) {
 
 /* ------------------------------
   初回ロード & 週切替（fetchの単一入口）
+  + KeepAlive対応（activated/deactivated）
 ------------------------------ */
 onMounted(async () => {
-  const qsWeek = typeof route.query.week === "string" ? route.query.week : null;
-  const initial = qsWeek || getWeekStartISO();
+  isActive.value = true;
+
+  const initial = resolveWeekTarget(route.query.week);
   await loadWeek(initial);
 
-  if (!qsWeek) {
-    await syncQuery(initial);
+  // URLにweekが無い場合は「実際にロードできた週」を同期（より安全）
+  if (!route.query.week && week.value?.week_start) {
+    await syncQuery(week.value.week_start);
   }
 });
 
+onActivated(async () => {
+  isActive.value = true;
+
+  // 復帰時にURLからweekが消えてたら、表示中の週で復元
+  if (hasLoaded.value && week.value?.week_start && !route.query.week) {
+    await syncQuery(week.value.week_start);
+  }
+
+  // 非表示中に week が変わっていた（URL操作等）ケースの追従
+  const target = resolveWeekTarget(route.query.week);
+  if (target && target !== week.value?.week_start) {
+    await loadWeek(target);
+  } else {
+    // 既存表示でOKなら、attach/progressだけ整える
+    // （days watcherは active ガードのせいで止まってた可能性がある）
+    const days = week.value?.days ?? [];
+    logStore.detachOwner(owner);
+    if (Array.isArray(days) && days.length) logStore.attachWeek(owner, days);
+    recalcProgress();
+  }
+});
+
+onDeactivated(() => {
+  isActive.value = false;
+});
+
+// 週ページ以外へ移動した時は watch を止めたいので route.name ガードを入れる
 watch(
-  () => route.query.week,
+  () => (route.name === "week" ? route.query.week : null),
   async (v) => {
-    const next = typeof v === "string" && v ? v : getWeekStartISO();
-    if (next !== week.value?.week_start) {
-      await loadWeek(next);
+    if (!isActive.value) return;
+
+    const next = resolveWeekTarget(v);
+    if (!next) return;
+
+    // 既にその週が表示されているなら、クエリだけ補完して終わり
+    if (hasLoaded.value && week.value?.week_start === next) {
+      if (!route.query.week) await syncQuery(week.value.week_start);
+      return;
     }
+
+    await loadWeek(next);
   }
 );
 </script>

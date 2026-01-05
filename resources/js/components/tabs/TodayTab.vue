@@ -38,10 +38,7 @@
         </div>
 
         <div class="w-full h-2 rounded-full bg-gray-200 overflow-hidden">
-          <div
-            class="h-full bg-green-500 transition-all"
-            :style="{ width: progressPct + '%' }"
-          />
+          <div class="h-full bg-green-500 transition-all" :style="{ width: progressPct + '%' }" />
         </div>
 
         <p class="text-xs text-gray-500">
@@ -74,7 +71,7 @@
 </template>
 
 <script setup>
-import { ref, computed, watch } from "vue";
+import { ref, computed, watch, onBeforeUnmount } from "vue";
 
 import TodaySlotView from "@/components/today/TodaySlotView.vue";
 import TodayAllView from "@/components/today/TodayAllView.vue";
@@ -120,10 +117,6 @@ const { today, nowSlot, nextSlot, habits, topPick, loading, errorMessage } =
 
 /* ==============================
    Progress（ローカル計算）
-   - morning/day/evening/night: time_slot がその値のものだけ
-   - all: 全部（いつでも=0 も含む）
-   - auto: resolvedTab と同じ計算（表示タブの概念に一致）
-   - SELF: rating===4 が done の真実
 ================================ */
 const progressScopeKey = computed(() => {
   return activeTab.value === "auto" ? resolvedTab.value : activeTab.value;
@@ -169,8 +162,6 @@ const uiProgress = computed(() => {
   }
 
   const slot = scopeKeyToSlot(scopeKey);
-
-  // 「そのスロットの習慣」だけでカウント（いつでも=0は含めない）
   const filtered = list.filter((h) => Number(h.time_slot ?? 0) === slot);
 
   const total = filtered.length;
@@ -200,6 +191,11 @@ watch(
   },
   { immediate: true }
 );
+
+// ★追加：画面離脱時に確実に掃除
+onBeforeUnmount(() => {
+  logStore.detachOwner(owner);
+});
 
 /* ==============================
    Toggle（ユーザー操作）

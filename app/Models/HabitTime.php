@@ -13,13 +13,14 @@ class HabitTime extends Model
         'habit_id',
         'time_slot',
         'notify_time',
-        'label',
+        'remind_offset', // ★追加
     ];
 
     protected $casts = [
         'habit_id' => 'integer',
         'time_slot' => 'integer',
-        'notify_time' => 'string', // 例: "08:00"（nullableでもcastは害なし）
+        'notify_time' => 'string',
+        'remind_offset' => 'integer', // ★追加
     ];
 
     public function habit()
@@ -29,7 +30,6 @@ class HabitTime extends Model
 
     public function logs()
     {
-        // 外部キーを明示（習慣ログの同一性は habit_time_id 前提）
         return $this->hasMany(HabitLog::class, 'habit_time_id');
     }
 }

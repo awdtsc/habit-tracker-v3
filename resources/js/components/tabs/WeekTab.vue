@@ -175,6 +175,16 @@ function recalcProgress() {
   };
 }
 
+// recalc を1フレームにまとめる（連続発火の圧縮）
+let rafId = null;
+function scheduleRecalcProgress() {
+  if (rafId) cancelAnimationFrame(rafId);
+  rafId = requestAnimationFrame(() => {
+    rafId = null;
+    recalcProgress();
+  });
+}
+
 /* ------------------------------
   store wiring
 ------------------------------ */
@@ -195,9 +205,9 @@ watch(
 
     logStore.detachOwner(owner);
     if (Array.isArray(days) && days.length) logStore.attachWeek(owner, days);
-    recalcProgress();
+    scheduleRecalcProgress();
   },
-  { immediate: true }
+  { immediate: true, flush: "post" }
 );
 
 onMounted(() => {
@@ -208,13 +218,14 @@ onMounted(() => {
     if (!hasLoaded.value) return;
     if (!evt?.date) return;
     if (!hasDateInWeek(evt.date)) return;
-    recalcProgress();
+    scheduleRecalcProgress();
   });
 });
 
 onUnmounted(() => {
   if (unsub) unsub();
   logStore.detachOwner(owner);
+  if (rafId) cancelAnimationFrame(rafId);
 });
 
 /* ------------------------------
@@ -269,12 +280,12 @@ async function onToggle({ date, habit }) {
   );
 
   // 即時反映（optimistic後の値で再計算）
-  recalcProgress();
+  scheduleRecalcProgress();
 
   try {
     await p;
   } finally {
-    recalcProgress();
+    scheduleRecalcProgress();
   }
 }
 
@@ -308,16 +319,17 @@ onActivated(async () => {
     await loadWeek(target);
   } else {
     // 既存表示でOKなら、attach/progressだけ整える
-    // （days watcherは active ガードのせいで止まってた可能性がある）
     const days = week.value?.days ?? [];
     logStore.detachOwner(owner);
     if (Array.isArray(days) && days.length) logStore.attachWeek(owner, days);
-    recalcProgress();
+    scheduleRecalcProgress();
   }
 });
 
 onDeactivated(() => {
   isActive.value = false;
+  // KeepAliveで残るので、非表示中は参照も外して完全に静かにする
+  logStore.detachOwner(owner);
 });
 
 // 週ページ以外へ移動した時は watch を止めたいので route.name ガードを入れる

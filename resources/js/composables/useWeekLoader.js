@@ -17,6 +17,7 @@ import {
     setCachedWeek,
     prefetchCurrentWeek,
 } from "@/state/weekCache";
+import { getWeekStartISO } from "@/utils/dateIso";
 
 function isCanceled(e) {
     return (
@@ -72,17 +73,24 @@ export function useWeekLoader() {
 
         const key =
             typeof weekStart === "string" && weekStart ? weekStart : null;
+        const currentWeekKey = getWeekStartISO();
+        let usedPrefetch = false;
 
         // ------------------------------
         // 1) キャッシュ即描画（※cloneして汚染を防ぐ）
         // ------------------------------
         if (preferCache && key) {
-            const cached = getCachedWeek(key);
+            let cached = getCachedWeek(key);
+            // 今日画面の事前fetchが飛んでいても cache miss になるので、現在週は prefetch を共有する
+            if (!cached && key === currentWeekKey) {
+                cached = await prefetchCurrentWeek();
+                usedPrefetch = !!cached;
+            }
             if (cached) {
                 week.value = cloneWeek(cached);
                 hasLoaded.value = true;
             }
-            if (cached && !revalidate) return cached;
+            if (cached && (!revalidate || usedPrefetch)) return cached;
         }
 
         // ------------------------------

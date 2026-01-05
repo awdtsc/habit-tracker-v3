@@ -9,7 +9,7 @@
 //------------------------------------------------------------
 
 import axios from "axios";
-import { clearUserCache, getUser } from "@/state/authUserCache";
+import { clearUserCache, getUser, isAuthUnknown } from "@/state/authUserCache";
 
 const api = axios.create({
     baseURL: "/api",
@@ -52,16 +52,22 @@ let confirmInflight = null;
 
 // “本当に未認証か？” を確定する（401誤爆対策）
 async function confirmUnauthenticated(requestPath) {
-    // /api/user 自身が401なら確定で未認証
+    // /api/user 自身が401なら確定で未認証（この interceptor でもここに来る）
     if (requestPath === "/api/user" || requestPath === "/user") return true;
 
     // 連打で確認が走らないよう共有
     if (confirmInflight) return confirmInflight;
 
     confirmInflight = (async () => {
-        // ★ authUserCache は “素のaxios” で /api/user を叩くので interceptor ループしない
-        const user = await getUser({ force: true });
-        return !user;
+        const v = await getUser({ force: true });
+
+        if (isAuthUnknown(v)) {
+            // ネットワーク/5xx等：未認証確定にしない（誤爆ログアウト防止）
+            return false;
+        }
+
+        // null のみ「未認証確定」
+        return v === null;
     })().finally(() => {
         confirmInflight = null;
     });
@@ -107,7 +113,6 @@ api.interceptors.response.use(
                 window.location.href =
                     "/login?redirect=" + encodeURIComponent(redirect);
 
-                // ここに到達したら SPA は遷移するので、以後の処理は止める
                 return;
             }
         }

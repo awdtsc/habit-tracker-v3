@@ -4,7 +4,12 @@
 //------------------------------------------------------------
 
 import { createRouter, createWebHistory } from "vue-router";
-import { getUser, getUserCacheAgeMs, USER_TTL_MS } from "@/state/authUserCache";
+import {
+    getUser,
+    getUserCacheAgeMs,
+    USER_TTL_MS,
+    isAuthUnknown,
+} from "@/state/authUserCache";
 
 // ★ Today/Week eager
 import TodayPage from "@/Pages/Today.vue";
@@ -76,10 +81,19 @@ const router = createRouter({
 // ------------------------------------------------------------
 // - TTL内は即OK（爆速）
 // - TTL切れたら /api/user を await
+// - /api/user がネットワーク/5xx等で失敗した場合は AUTH_UNKNOWN を返す
+//   → 誤爆ログアウトを避けるため、ここでは通す（本当に切れていれば後続APIが401になる）
+// ------------------------------------------------------------
 router.beforeEach(async (to) => {
     if (to.meta.public) return true;
 
     const user = await getUser({ force: false });
+
+    if (isAuthUnknown(user)) {
+        // ネットワーク不調など：誤爆ログアウトを避けるため通す
+        return true;
+    }
+
     if (user) return true;
 
     return {

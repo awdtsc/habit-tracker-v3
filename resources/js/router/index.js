@@ -1,11 +1,19 @@
 // resources/js/router/index.js
 //------------------------------------------------------------
 // Vue Router（Sanctum + SPA）— 高速 + 安全（/api/user TTL）
+//
+// ポイント:
+// - beforeEach: 認証が必要なページだけ判定
+// - AUTH_UNKNOWN(ネットワーク/5xx等)は誤爆ログアウトを避けて通す
+// - ただし AUTH_UNKNOWN 直後に beforeEach で /api/user を連打しない
+//   → hasConfirmedAuthState() と getUserCacheAgeMs() で抑制
 //------------------------------------------------------------
 
 import { createRouter, createWebHistory } from "vue-router";
 import {
     getUser,
+    getCachedUser,
+    hasConfirmedAuthState,
     getUserCacheAgeMs,
     USER_TTL_MS,
     isAuthUnknown,
@@ -65,6 +73,7 @@ const routes = [
         path: "/:pathMatch(.*)*",
         name: "not-found",
         component: () => import("../Pages/NotFound.vue"),
+        meta: { public: true }, // ★ 404はpublic扱いの方が事故が少ない
     },
 ];
 
@@ -79,13 +88,31 @@ const router = createRouter({
 // ------------------------------------------------------------
 //  Auth Guard
 // ------------------------------------------------------------
-// - TTL内は即OK（爆速）
-// - TTL切れたら /api/user を await
-// - /api/user がネットワーク/5xx等で失敗した場合は AUTH_UNKNOWN を返す
-//   → 誤爆ログアウトを避けるため、ここでは通す（本当に切れていれば後続APIが401になる）
+// - publicは常に通す
+// - requiresAuth のみチェック
+// - AUTH_UNKNOWN は通す（誤爆ログアウト回避）
+// - AUTH_UNKNOWN直後に /api/user を連打しない（オフライン等）
 // ------------------------------------------------------------
 router.beforeEach(async (to) => {
-    if (to.meta.public) return true;
+    // public route
+    if (to.meta.public) {
+        // ログイン済みで login/register に来たら追い返す（体験改善）
+        if (to.name === "login" || to.name === "register") {
+            const cached = getCachedUser();
+            if (cached) return { name: "today" };
+        }
+        return true;
+    }
+
+    // 認証不要ルート（現状ほぼ無いけど保険）
+    if (!to.meta.requiresAuth) return true;
+
+    // ★ 「確定状態がまだ一度も取れていない」かつ
+    // ★ 「直近で /api/user を確認しに行っている（=AUTH_UNKNOWN の可能性が高い）」
+    // → beforeEach で /api/user を連打しないため、今回は叩かず通す
+    if (!hasConfirmedAuthState() && getUserCacheAgeMs() < USER_TTL_MS) {
+        return true;
+    }
 
     const user = await getUser({ force: false });
 
@@ -106,9 +133,11 @@ router.beforeEach(async (to) => {
 //  背景でサイレント再検証（安全性）
 // ------------------------------------------------------------
 // - 遷移は止めない
-// - TTLの半分を過ぎたら裏で更新
+// - TTLの半分を過ぎたら裏で更新（ただしpublic/非requiresAuthは除外）
+// ------------------------------------------------------------
 router.afterEach((to) => {
     if (to.meta.public) return;
+    if (!to.meta.requiresAuth) return;
 
     const age = getUserCacheAgeMs();
     if (age > USER_TTL_MS / 2) {

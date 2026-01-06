@@ -1,4 +1,4 @@
-\<!-- resources/js/components/today/TodaySlotView.vue -->
+<!-- resources/js/components/today/TodaySlotView.vue -->
 <template>
   <div class="space-y-10">
     <!-- 1) この時間帯（未完） -->

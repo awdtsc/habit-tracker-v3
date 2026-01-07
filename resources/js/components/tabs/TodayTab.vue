@@ -54,7 +54,7 @@
         :habits="habits"
         :now-slot="nowSlot"
         :next-slot="nextSlot"
-        :show-next="true"
+        :show-next="showNext"
         @update="onRowUpdate"
       />
 
@@ -114,6 +114,16 @@ const apiScope = computed(() => "all");
 // loader（常に all を取得）
 const { today, nowSlot, nextSlot, habits, topPick, loading, errorMessage } =
   useTodayLoader(apiScope);
+
+/**
+ * ★仕様：Nextは「nowSlotのタブを見ているときだけ」出す
+ * - activeTabがautoの場合も、resolvedTabがnowSlotに解決されているのでOK
+ */
+const showNext = computed(() => {
+  const nowKey = enumToSlotKey(nowSlot.value);
+  if (!nowKey) return false;
+  return resolvedTab.value === nowKey; // morning/day/evening/night の一致時のみ
+});
 
 /* ==============================
    Progress（ローカル計算）
@@ -186,13 +196,14 @@ const owner = logStore.createOwner();
 watch(
   [today, habits],
   ([d, hs]) => {
+    // ★ここで必ず掃除してから付け直すので、古いhabitObj参照が積み上がらない
     logStore.detachOwner(owner);
     if (d && hs?.length) logStore.attachHabits(owner, d, hs);
   },
   { immediate: true }
 );
 
-// ★追加：画面離脱時に確実に掃除
+// ★画面離脱時に確実に掃除
 onBeforeUnmount(() => {
   logStore.detachOwner(owner);
 });

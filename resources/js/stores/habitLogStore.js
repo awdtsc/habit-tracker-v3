@@ -11,6 +11,10 @@ import api from "@/axios";
  *
  * ★注意：
  * log の同一性は habit_time_id + date。
+ *
+ * ★2026-01-06:
+ * - detachOwner時に「そのkeyを参照しているownerがゼロになったら」logsByKey/requestVersionも掃除する
+ *   → attachの積み上がり/画面遷移の繰り返しでメモリが増え続けるのを抑える
  */
 
 const state = reactive({
@@ -103,6 +107,11 @@ function createOwner() {
     return Symbol("habitLogOwner");
 }
 
+/**
+ * ownerを外す
+ * ★重要: perKey.size===0（そのkeyを参照するownerがいなくなった）なら
+ * logsByKey / requestVersion も掃除してメモリ増殖を抑える
+ */
 function detachOwner(ownerId) {
     const keys = keysByOwner.get(ownerId);
     if (!keys) return;
@@ -112,7 +121,15 @@ function detachOwner(ownerId) {
         if (!perKey) continue;
 
         perKey.delete(ownerId);
-        if (perKey.size === 0) attached.delete(key);
+
+        if (perKey.size === 0) {
+            // このkeyを参照するownerがゼロになった
+            attached.delete(key);
+
+            // ★ここでログキャッシュも掃除（必要なら残す設計にもできるが、今は安全側）
+            state.logsByKey.delete(key);
+            requestVersion.delete(key);
+        }
     }
 
     keysByOwner.delete(ownerId);
@@ -277,6 +294,7 @@ async function toggle(date, habitObj, payload, scope = "all", meta = {}) {
 
         return data;
     } catch (e) {
+        // すでに新しいtoggleが走ってたら巻き戻さない
         if (requestVersion.get(key) !== v) return;
 
         // rollback

@@ -24,8 +24,8 @@ Route::prefix('v1')->group(function () {
     | Auth (public)
     |--------------------------------------------------------------------------
     */
-    Route::post('/auth/login',    [ApiAuthController::class, 'login']);
-    Route::post('/auth/register', [ApiAuthController::class, 'register']);
+    Route::post('/auth/login',    [ApiAuthController::class, 'login'])->middleware('throttle:login');
+    Route::post('/auth/register', [ApiAuthController::class, 'register'])->middleware('throttle:register');
 
     /*
     |--------------------------------------------------------------------------

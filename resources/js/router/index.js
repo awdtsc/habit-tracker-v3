@@ -7,6 +7,11 @@
 // - AUTH_UNKNOWN(ネットワーク/5xx等)は誤爆ログアウトを避けて通す
 // - ただし AUTH_UNKNOWN 直後に /me を連打しない
 //   → hasConfirmedAuthState() と getUserCacheAgeMs() で抑制
+//
+// 追加 (M1: Open-redirect 対策):
+// - login/register の redirect query は「内部パスのみ」許可
+// - 不正なら query を掃除してから画面表示
+// - guard が付与する redirect も内部パスに正規化
 //------------------------------------------------------------
 
 import { createRouter, createWebHistory } from "vue-router";
@@ -24,6 +29,34 @@ import { getAuthToken } from "@/axios";
 // ★ Today/Week eager
 import TodayPage from "@/Pages/Today.vue";
 import WeeklyPage from "@/Pages/Weekly.vue";
+
+// ------------------------------------------------------------
+//  M1: redirect query sanitizer（内部パスのみ許可）
+// ------------------------------------------------------------
+function safeRedirect(raw, fallback = null) {
+    if (typeof raw !== "string" || raw.length === 0) return fallback;
+
+    // 過剰な長さは拒否（ログインリンク悪用/メモリ圧迫の保険）
+    if (raw.length > 1024) return fallback;
+
+    let v = raw;
+    try {
+        v = decodeURIComponent(raw);
+    } catch {
+        v = raw;
+    }
+
+    // 内部パスのみ
+    if (!v.startsWith("/")) return fallback;
+
+    // スキーム相対URL（//evil.com）拒否
+    if (v.startsWith("//")) return fallback;
+
+    // 改行等の混入拒否
+    if (v.includes("\n") || v.includes("\r")) return fallback;
+
+    return v;
+}
 
 // ------------------------------------------------------------
 //  Routes
@@ -96,6 +129,21 @@ const router = createRouter({
 // - AUTH_UNKNOWN直後に /me を連打しない（オフライン等）
 // ------------------------------------------------------------
 router.beforeEach(async (to) => {
+    // --------------------------------------------------------
+    // M1: login/register の redirect query を先に掃除
+    // - 外部URL等が入っていたら query ごと落として同一画面へ
+    // --------------------------------------------------------
+    if (to.name === "login" || to.name === "register") {
+        const raw = to.query?.redirect;
+        if (raw != null) {
+            const safe = safeRedirect(String(raw), null);
+            if (!safe) {
+                // 不正redirectは削除（無限ループ回避のためreplace）
+                return { name: to.name, query: {}, replace: true };
+            }
+        }
+    }
+
     // public route
     if (to.meta.public) {
         // ログイン済みで login/register に来たら追い返す（体験改善）
@@ -136,9 +184,15 @@ router.beforeEach(async (to) => {
 
     if (user) return true;
 
+    // --------------------------------------------------------
+    // 未ログイン → loginへ
+    // redirect は内部パスのみ（念のため正規化）
+    // --------------------------------------------------------
+    const redirect = safeRedirect(to.fullPath, "/today");
+
     return {
         name: "login",
-        query: { redirect: to.fullPath },
+        query: { redirect },
     };
 });
 

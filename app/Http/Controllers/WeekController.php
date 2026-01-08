@@ -24,7 +24,10 @@ class WeekController extends Controller
         $tz = 'Asia/Tokyo';
 
         $weekParam = $request->query('week');
-        $debug = $request->boolean('debug');
+
+        // L1: debug payload は local のときだけ許可（本番では無視）
+        $debugRequested = $request->boolean('debug');
+        $debug = $debugRequested && app()->environment('local');
 
         $base = $weekParam
             ? Carbon::parse($weekParam, $tz)

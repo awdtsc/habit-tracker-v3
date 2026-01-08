@@ -75,6 +75,28 @@ const password = ref("");
 
 const router = useRouter();
 
+/**
+ * M1: Open-redirect 対策
+ * - redirect query は「SPA内部パス（/ で始まる）」のみ許可
+ * - //evil.com や http(s)://... は拒否して既定へフォールバック
+ */
+function safeRedirect(raw, fallback = "/today") {
+  if (typeof raw !== "string" || raw.length === 0) return fallback;
+
+  let v = raw;
+  try {
+    v = decodeURIComponent(raw);
+  } catch {
+    v = raw;
+  }
+
+  if (!v.startsWith("/")) return fallback;
+  if (v.startsWith("//")) return fallback;
+  if (v.includes("\n") || v.includes("\r")) return fallback;
+
+  return v;
+}
+
 async function submit() {
   if (!name.value || !email.value || !password.value) {
     alert("全ての項目を入力してください");
@@ -96,7 +118,8 @@ async function submit() {
       clearUserCache();
       await getUser({ force: true });
 
-      const redirect = router.currentRoute.value.query.redirect || "/today";
+      const rawRedirect = router.currentRoute.value.query.redirect;
+      const redirect = safeRedirect(rawRedirect, "/today");
       await router.replace(redirect);
       return;
     }

@@ -39,12 +39,16 @@ return [
     | Expiration Minutes
     |--------------------------------------------------------------------------
     |
-    | Token expiration for API tokens. Cookie-based SPA sessions do not
-    | expire here — they follow the session lifetime instead.
+    | Token expiration for API tokens.
+    | - null: never expires (NOT recommended for bearer tokens)
+    | - int: minutes until tokens are treated as expired
+    |
+    | Recommended default here: 30 days (43200 minutes).
+    | You can override per-environment with SANCTUM_EXPIRATION in .env.
     |
     */
 
-    'expiration' => null,
+    'expiration' => env('SANCTUM_EXPIRATION', 43200),
 
     /*
     |--------------------------------------------------------------------------

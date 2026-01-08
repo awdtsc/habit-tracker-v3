@@ -21,8 +21,11 @@ return Application::configure(basePath: dirname(__DIR__))
         | このプロジェクトは API を Bearer トークンに統一するため、
         | web 側で StartSession / CSRF / Sanctum stateful は不要。
         |
+        | H2: CSP/セキュアヘッダ（XSS耐性の底上げ）
+        |
         */
         $middleware->group('web', [
+            \App\Http\Middleware\SecurityHeaders::class,
             \Illuminate\Routing\Middleware\SubstituteBindings::class,
         ]);
 
@@ -34,9 +37,11 @@ return Application::configure(basePath: dirname(__DIR__))
         | routes/api.php は自動で /api プレフィックスが付く想定。
         | Bearer トークン認証は auth:sanctum をルート側で使用。
         |
+        | M3: CORS を明示（別originのSPA配信/将来拡張に備える）
+        |
         */
         $middleware->group('api', [
-            // いまは必要最小限。必要なら throttle 等を足す。
+            \Illuminate\Http\Middleware\HandleCors::class,
             \Illuminate\Routing\Middleware\SubstituteBindings::class,
         ]);
 

@@ -1,33 +1,63 @@
 // resources/js/axios.js
 //------------------------------------------------------------
-// Axios 設定（Laravel Sanctum + Cookie 認証用）
+// Axios 設定（Bearer Token 認証用）
 //
-// おすすめA:
-// - 401 を見たら user cache は即破棄（TTLの“通っちゃう”を潰す）
-// - ただし即ログインへ飛ばさない（誤爆ログアウト防止）
-// - /api/user を “素のaxios” で確認して、未認証が確定したら/loginへ
+// - Cookie/Session/CSRF に依存しない（withCredentials しない）
+// - Authorization: Bearer <token> を自動付与
+// - 401 は token を破棄して /login へ（必要なら redirect パラメータ付き）
+//
+// 重要:
+// - 旧Cookie方式の互換のため initCsrf() は no-op で残す
 //------------------------------------------------------------
 
 import axios from "axios";
-import { clearUserCache, getUser, isAuthUnknown } from "@/state/authUserCache";
 
+// -------------------------------
+// Token storage
+// -------------------------------
+const TOKEN_KEY = "auth_token";
+
+export function getAuthToken() {
+    try {
+        return localStorage.getItem(TOKEN_KEY);
+    } catch {
+        return null;
+    }
+}
+
+export function setAuthToken(token) {
+    try {
+        if (!token) return;
+        localStorage.setItem(TOKEN_KEY, token);
+    } catch {
+        // ignore
+    }
+}
+
+export function clearAuthToken() {
+    try {
+        localStorage.removeItem(TOKEN_KEY);
+    } catch {
+        // ignore
+    }
+}
+
+// -------------------------------
+// API client
+// -------------------------------
 const api = axios.create({
-    baseURL: "/api",
-    withCredentials: true,
+    // Bearer統一なら v1 を基本にする
+    baseURL: "/api/v1",
+    withCredentials: false,
     headers: {
         "X-Requested-With": "XMLHttpRequest",
         Accept: "application/json",
     },
 });
 
-// ------------------------------------------------------------
-// CSRF 初期化
-//   login / register の前に必須
-// ------------------------------------------------------------
+// 旧Cookie方式で必要だったが、Bearer方式では不要（互換のため残す）
 export async function initCsrf() {
-    await axios.get("/sanctum/csrf-cookie", {
-        withCredentials: true,
-    });
+    return;
 }
 
 // ------------------------------------------------------------
@@ -48,32 +78,21 @@ function isAuthPagePath(pathname) {
 }
 
 let redirecting = false;
-let confirmInflight = null;
 
-// “本当に未認証か？” を確定する（401誤爆対策）
-async function confirmUnauthenticated(requestPath) {
-    // /api/user 自身が401なら確定で未認証（この interceptor でもここに来る）
-    if (requestPath === "/api/user" || requestPath === "/user") return true;
-
-    // 連打で確認が走らないよう共有
-    if (confirmInflight) return confirmInflight;
-
-    confirmInflight = (async () => {
-        const v = await getUser({ force: true });
-
-        if (isAuthUnknown(v)) {
-            // ネットワーク/5xx等：未認証確定にしない（誤爆ログアウト防止）
-            return false;
+// ------------------------------------------------------------
+// Request Interceptor（Bearer付与）
+// ------------------------------------------------------------
+api.interceptors.request.use(
+    (config) => {
+        const token = getAuthToken();
+        if (token) {
+            config.headers = config.headers ?? {};
+            config.headers.Authorization = `Bearer ${token}`;
         }
-
-        // null のみ「未認証確定」
-        return v === null;
-    })().finally(() => {
-        confirmInflight = null;
-    });
-
-    return confirmInflight;
-}
+        return config;
+    },
+    (error) => Promise.reject(error)
+);
 
 // ------------------------------------------------------------
 // Response Interceptor（401処理）
@@ -84,37 +103,35 @@ api.interceptors.response.use(
         const status = error?.response?.status ?? 0;
 
         if (status === 401) {
-            // ★どの401でも user cache を即破棄（安全側）
-            try {
-                clearUserCache();
-            } catch {
-                // ignore
-            }
-
             const currentPath = window.location.pathname;
-            const requestPath = normalizePath(error?.config?.url ?? "");
 
-            // publicページでは飛ばさない（無限ループ回避）
+            // authページでは飛ばさない（無限ループ回避）
             if (redirecting || isAuthPagePath(currentPath)) {
                 return Promise.reject(error);
             }
 
-            // ★未認証が確定した時だけ /login へ
-            const unauth = await confirmUnauthenticated(requestPath);
-            if (unauth) {
-                redirecting = true;
+            const requestPath = normalizePath(error?.config?.url ?? "");
+            const token = getAuthToken();
 
-                const redirect =
-                    window.location.pathname + window.location.search;
-                console.warn(
-                    `[axios] 401 confirmed unauth (req:${requestPath}) → redirect to /login`
-                );
-
-                window.location.href =
-                    "/login?redirect=" + encodeURIComponent(redirect);
-
-                return;
+            // token が無いなら「未ログイン」なので、静かに401を返す（画面側で判断させる）
+            if (!token) {
+                return Promise.reject(error);
             }
+
+            // token があるのに401 => 期限切れ/失効/無効。tokenを破棄してログインへ。
+            clearAuthToken();
+
+            redirecting = true;
+            const redirect = window.location.pathname + window.location.search;
+
+            console.warn(
+                `[axios] 401 (req:${requestPath}) -> clear token and redirect to /login`
+            );
+
+            window.location.href =
+                "/login?redirect=" + encodeURIComponent(redirect);
+
+            return;
         }
 
         return Promise.reject(error);

@@ -2,29 +2,47 @@
 
 use Illuminate\Support\Facades\Route;
 
+use App\Http\Controllers\Auth\ApiAuthController;
+use App\Http\Controllers\TodayController;
+use App\Http\Controllers\WeekController;
+use App\Http\Controllers\HabitController;
+use App\Http\Controllers\HabitLogController;
+
 /*
 |--------------------------------------------------------------------------
-| API Routes (Token-based API 用 — 現在は未使用)
+| API Routes (Bearer Token / Sanctum Personal Access Tokens)
 |--------------------------------------------------------------------------
-|
-| このアプリの SPA は「session + Sanctum」で認証しているため、
-| /api/* のエンドポイントはすべて routes/web.php で提供しています。
-|
-| → 理由：
-|   api.php に置くと "api" ミドルウェアが適用されてしまい、
-|   StartSession が動かず、Sanctum の session 認証が効かないため。
-|
-| 将来、外部アプリ・モバイルアプリ向けに
-| 「Token-based API（auth:sanctum or API tokens）」を追加する場合、
-| こちらにルートを記述してください。
-|
+| base: /api
+| このファイルでは v1 を切って運用する。
+| 例: Route::post('/auth/login') => POST /api/v1/auth/login
 */
 
 Route::prefix('v1')->group(function () {
 
-    // 例（将来用）:
-    // Route::middleware('auth:sanctum')->get('/profile', function () {
-    //     return ['status' => 'ok'];
-    // });
+    /*
+    |--------------------------------------------------------------------------
+    | Auth (public)
+    |--------------------------------------------------------------------------
+    */
+    Route::post('/auth/login',    [ApiAuthController::class, 'login']);
+    Route::post('/auth/register', [ApiAuthController::class, 'register']);
 
+    /*
+    |--------------------------------------------------------------------------
+    | Auth (protected: Bearer required)
+    |--------------------------------------------------------------------------
+    */
+    Route::middleware('auth:sanctum')->group(function () {
+
+        Route::get('/auth/me',      [ApiAuthController::class, 'me']);
+        Route::post('/auth/logout', [ApiAuthController::class, 'logout']);
+
+        // Today / Week
+        Route::get('/today', [TodayController::class, 'show']);
+        Route::get('/week',  [WeekController::class, 'show']);
+
+        // Habits / Logs
+        Route::post('/habits', [HabitController::class, 'store']);
+        Route::post('/habits/{habit}/toggle', [HabitLogController::class, 'toggle']);
+    });
 });

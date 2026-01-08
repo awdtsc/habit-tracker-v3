@@ -1,41 +1,49 @@
 <!-- resources/js/Pages/Auth/Register.vue -->
 <template>
   <div class="min-h-screen bg-[#f7f7f7] flex flex-col items-center justify-center px-4">
-
     <h1 class="text-3xl font-bold text-[#2b6cb0] mb-10">
       ハビットトラッカー
     </h1>
 
     <div class="w-full max-w-md bg-[#e8ecf1] rounded-2xl shadow-md p-10 flex flex-col items-center">
-
       <h2 class="text-xl font-bold text-gray-700 mb-8">ユーザー登録</h2>
 
       <!-- 名前 -->
       <div class="w-full mb-6">
-        <label class="block text-sm text-gray-700 mb-1">名前</label>
+        <label for="register-name" class="block text-sm text-gray-700 mb-1">名前</label>
         <input
+          id="register-name"
+          name="name"
           v-model.trim="name"
           type="text"
+          autocomplete="name"
           class="w-full px-4 py-3 bg-[#e6efff] rounded-xl outline-none focus:ring-2 focus:ring-blue-300 text-gray-700"
         />
       </div>
 
       <!-- メール -->
       <div class="w-full mb-6">
-        <label class="block text-sm text-gray-700 mb-1">メールアドレス</label>
+        <label for="register-email" class="block text-sm text-gray-700 mb-1">メールアドレス</label>
         <input
+          id="register-email"
+          name="email"
           v-model.trim="email"
           type="email"
+          autocomplete="email"
+          inputmode="email"
           class="w-full px-4 py-3 bg-[#e6efff] rounded-xl outline-none focus:ring-2 focus:ring-blue-300 text-gray-700"
         />
       </div>
 
       <!-- パスワード -->
       <div class="w-full mb-8">
-        <label class="block text-sm text-gray-700 mb-1">パスワード</label>
+        <label for="register-password" class="block text-sm text-gray-700 mb-1">パスワード</label>
         <input
+          id="register-password"
+          name="password"
           v-model.trim="password"
           type="password"
+          autocomplete="new-password"
           class="w-full px-4 py-3 bg-[#e6efff] rounded-xl outline-none focus:ring-2 focus:ring-blue-300 text-gray-700"
         />
       </div>
@@ -52,74 +60,61 @@
         ログインに戻る
       </button>
     </div>
-
   </div>
 </template>
 
 <script setup>
-import { ref } from 'vue'
-import api, { initCsrf } from '@/axios'
-import { useRouter } from 'vue-router'
+import { ref } from "vue";
+import api, { setAuthToken } from "@/axios";
+import { useRouter } from "vue-router";
+import { clearUserCache, getUser } from "@/state/authUserCache";
 
-const name = ref('')
-const email = ref('')
-const password = ref('')
+const name = ref("");
+const email = ref("");
+const password = ref("");
 
-const router = useRouter()
+const router = useRouter();
 
 async function submit() {
   if (!name.value || !email.value || !password.value) {
-    alert('全ての項目を入力してください')
-    return
+    alert("全ての項目を入力してください");
+    return;
   }
 
   try {
-    console.log('[register] start')
+    console.log("[register] start");
 
-    // ------------------------------------------------------------
-    // ① CSRF Cookie
-    // ------------------------------------------------------------
-    await initCsrf()
-
-    // ------------------------------------------------------------
-    // ② /api/register
-    // ------------------------------------------------------------
-    await api.post('/register', {
+    const res = await api.post("/auth/register", {
       name: name.value,
       email: email.value,
       password: password.value,
-    })
+    });
 
-    console.info('[register] success')
+    const token = res?.data?.token ?? null;
+    if (token) {
+      setAuthToken(token);
+      clearUserCache();
+      await getUser({ force: true });
 
-    // ------------------------------------------------------------
-    // ③ 自動ログイン直後は /api/user が 401 になる事がある
-    //    → router.beforeEach の判断とずれるのを防ぐため 1 回だけ確認
-    // ------------------------------------------------------------
-    try {
-      await api.get('/user')
-    } catch {
-      console.warn('[register] /user not ready yet (will be retried by router)')
+      const redirect = router.currentRoute.value.query.redirect || "/today";
+      await router.replace(redirect);
+      return;
     }
 
-    // ------------------------------------------------------------
-    // ④ /today へ遷移（redirect も考慮）
-    // ------------------------------------------------------------
-    const redirect = router.currentRoute.value.query.redirect || '/today'
-    router.push(redirect)
-
+    alert("登録しました。続けてログインしてください。");
+    router.push("/login");
   } catch (e) {
-    console.error('[register error]', e)
+    console.error("[register error]", e);
 
     if (e.response?.status === 422) {
-      alert('入力内容に誤りがあります')
+      alert("入力内容に誤りがあります");
     } else {
-      alert('登録に失敗しました')
+      alert("登録に失敗しました");
     }
   }
 }
 
 function goLogin() {
-  router.push('/login')
+  router.push("/login");
 }
 </script>

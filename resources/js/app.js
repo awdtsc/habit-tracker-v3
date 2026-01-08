@@ -1,21 +1,14 @@
 // resources/js/app.js
 
-import './bootstrap';
-import '../css/app.css';
+import "./bootstrap";
+import "../css/app.css";
 
-import { createApp } from 'vue';
-import App from './App.vue';
-import router from './router';
+import { createApp } from "vue";
+import App from "./App.vue";
+import router from "./router";
 
-import { initCsrf } from './axios';  // ★ 必須
+// ★ Bearer運用ではCSRF cookieは不要（むしろCookie汚染の原因）
+// import { initCsrf } from "./axios";
+// await initCsrf();
 
-// ------------------------------------------------------------
-// ★ SPA 起動前に Sanctum CSRF Cookie を取得する
-// ------------------------------------------------------------
-await initCsrf();
-console.log('[startup] CSRF cookie initialized');
-
-// Vue アプリ起動
-createApp(App)
-  .use(router)
-  .mount('#app');
+createApp(App).use(router).mount("#app");

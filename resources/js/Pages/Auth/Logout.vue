@@ -6,22 +6,27 @@
 </template>
 
 <script setup>
-import api from '@/axios'
-import { useRouter } from 'vue-router'
+import api, { clearAuthToken } from "@/axios";
+import { useRouter } from "vue-router";
+import { clearUserCache } from "@/state/authUserCache";
 
-const router = useRouter()
+const router = useRouter();
 
-logout()
+logout();
 
 async function logout() {
   try {
-    await api.post('/logout')
-    console.info('[logout] OK')
+    // token は interceptor が付与する
+    await api.post("/auth/logout");
+    console.info("[logout] OK");
   } catch (e) {
-    console.error('[logout error]', e)
+    console.error("[logout error]", e);
+    // 失敗してもローカルでは確実に消す
   }
 
-  // 即座に /login へ遷移（ここはお好み）
-  router.push('/login')
+  clearAuthToken();
+  clearUserCache();
+
+  router.replace("/login");
 }
 </script>

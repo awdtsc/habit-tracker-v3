@@ -15,23 +15,14 @@ return Application::configure(basePath: dirname(__DIR__))
 
         /*
         |--------------------------------------------------------------------------
-        | Web Middleware（Sanctum SPA の正しい順序）
+        | Web Middleware（SPA shell を返すだけ。Cookie/Session/CSRF は使わない）
         |--------------------------------------------------------------------------
+        |
+        | このプロジェクトは API を Bearer トークンに統一するため、
+        | web 側で StartSession / CSRF / Sanctum stateful は不要。
+        |
         */
         $middleware->group('web', [
-            \Illuminate\Cookie\Middleware\EncryptCookies::class,
-            \Illuminate\Cookie\Middleware\AddQueuedCookiesToResponse::class,
-
-            // ★ Sanctum SPA ここ（stateful domain 判定）
-            \Laravel\Sanctum\Http\Middleware\EnsureFrontendRequestsAreStateful::class,
-
-            // ★ Session は CSRF より前で OK
-            \Illuminate\Session\Middleware\StartSession::class,
-
-            // CSRF
-            \Illuminate\Foundation\Http\Middleware\ValidateCsrfToken::class,
-            \Illuminate\View\Middleware\ShareErrorsFromSession::class,
-
             \Illuminate\Routing\Middleware\SubstituteBindings::class,
         ]);
 
@@ -39,9 +30,13 @@ return Application::configure(basePath: dirname(__DIR__))
         |--------------------------------------------------------------------------
         | API Middleware（Stateless）
         |--------------------------------------------------------------------------
+        |
+        | routes/api.php は自動で /api プレフィックスが付く想定。
+        | Bearer トークン認証は auth:sanctum をルート側で使用。
+        |
         */
         $middleware->group('api', [
-            // API は基本 stateless（Cookie認証はしない）
+            // いまは必要最小限。必要なら throttle 等を足す。
             \Illuminate\Routing\Middleware\SubstituteBindings::class,
         ]);
 
@@ -51,7 +46,8 @@ return Application::configure(basePath: dirname(__DIR__))
         |--------------------------------------------------------------------------
         */
         $middleware->alias([
-            'auth.api' => \App\Http\Middleware\EnsureApiAuthenticated::class,
+            // いったん残してもいいが、Bearer統一なら基本使わない
+            // 'auth.api' => \App\Http\Middleware\EnsureApiAuthenticated::class,
         ]);
     })
     ->withExceptions(function (Exceptions $exceptions) {

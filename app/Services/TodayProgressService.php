@@ -57,7 +57,7 @@ class TodayProgressService
         }
 
         $tz = 'Asia/Tokyo';
-        $isoWeekday = Carbon::parse($date, $tz)->isoWeekday(); // 1..7
+        $dateCarbon = Carbon::parse($date, $tz);
 
         // 初期（total=0のスコープも必ず返す）
         $scopes = ['all', 'morning', 'day', 'evening', 'night'];
@@ -66,7 +66,7 @@ class TodayProgressService
             $counts[$s] = ['done' => 0, 'total' => 0, 'percent' => 0];
         }
 
-        // 1) 対象 habit_times（未アーカイブ + 曜日フィルタ）
+        // 1) 対象 habit_times（未アーカイブ + スケジュール判定）
         $habitTimes = HabitTime::query()
             ->whereHas('habit', function ($query) use ($userId) {
                 $query->where('user_id', $userId)
@@ -76,7 +76,7 @@ class TodayProgressService
             ->orderBy('time_slot')
             ->orderBy('id')
             ->get()
-            ->filter(fn (HabitTime $t) => $t->habit && $this->isHabitScheduledOn($t->habit, $isoWeekday))
+            ->filter(fn (HabitTime $t) => $t->habit && $this->isHabitScheduledOn($t->habit, $dateCarbon))
             ->values();
 
         $habitTimeIds = $habitTimes->pluck('id')->all();
@@ -148,19 +148,8 @@ class TodayProgressService
         };
     }
 
-    private function isHabitScheduledOn(Habit $habit, int $isoWeekday): bool
+    private function isHabitScheduledOn(Habit $habit, Carbon $date): bool
     {
-        $days = $this->normalizeJsonArray($habit->days_of_week);
-        return count($days) === 0 ? true : in_array($isoWeekday, $days, true);
-    }
-
-    private function normalizeJsonArray($value): array
-    {
-        if (is_array($value)) return $value;
-        if (is_string($value) && $value !== '') {
-            $decoded = json_decode($value, true);
-            return is_array($decoded) ? $decoded : [];
-        }
-        return [];
+        return $habit->isScheduledFor($date);
     }
 }

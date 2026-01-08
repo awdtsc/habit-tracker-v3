@@ -16,17 +16,14 @@ logout();
 
 async function logout() {
   try {
-    // token は interceptor が付与する
-    await api.post("/auth/logout");
+    await api.post("/logout");
     console.info("[logout] OK");
   } catch (e) {
     console.error("[logout error]", e);
-    // 失敗してもローカルでは確実に消す
+  } finally {
+    clearAuthToken();
+    clearUserCache();
+    router.replace("/login");
   }
-
-  clearAuthToken();
-  clearUserCache();
-
-  router.replace("/login");
 }
 </script>

@@ -25,7 +25,7 @@ class WeekController extends Controller
 
         $weekParam = $request->query('week');
 
-        // L1: debug payload は local のときだけ許可（本番では無視）
+        // L1: debug は local のときだけ有効（本番では無視）
         $debugRequested = $request->boolean('debug');
         $debug = $debugRequested && app()->environment('local');
 
@@ -88,7 +88,9 @@ class WeekController extends Controller
 
             foreach ($habitTimes as $habitTime) {
                 $habit = $habitTime->habit;
-                if (!$habit || !$this->isHabitScheduledOn($habit, $isoWeekday)) {
+
+                // ★本題: days_of_week だけでなく Habit::isScheduledFor を使う
+                if (!$habit || !$this->isHabitScheduledOn($habit, $day)) {
                     continue;
                 }
 
@@ -244,10 +246,9 @@ class WeekController extends Controller
         return [];
     }
 
-    private function isHabitScheduledOn(Habit $habit, int $isoWeekday): bool
+    private function isHabitScheduledOn(Habit $habit, Carbon $date): bool
     {
-        $days = $this->normalizeJsonArray($habit->days_of_week);
-        return count($days) === 0 ? true : in_array($isoWeekday, $days, true);
+        return $habit->isScheduledFor($date);
     }
 
     private function weekdayJa(int $isoWeekday): string

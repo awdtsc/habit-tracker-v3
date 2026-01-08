@@ -27,7 +27,11 @@ export function getAuthToken() {
 
 export function setAuthToken(token) {
     try {
-        if (!token) return;
+        // ★falsy（null/undefined/空文字）は「削除」扱いにする
+        if (!token) {
+            localStorage.removeItem(TOKEN_KEY);
+            return;
+        }
         localStorage.setItem(TOKEN_KEY, token);
     } catch {
         // ignore
@@ -77,6 +81,14 @@ function isAuthPagePath(pathname) {
     return pathname === "/login" || pathname === "/register";
 }
 
+// 「認証系API」は interceptor で強制リダイレクトしない（誤爆防止）
+function isAuthApiPath(pathname) {
+    return (
+        pathname.startsWith("/api/v1/auth/") ||
+        pathname.startsWith("/api/auth/")
+    );
+}
+
 let redirecting = false;
 
 // ------------------------------------------------------------
@@ -111,6 +123,12 @@ api.interceptors.response.use(
             }
 
             const requestPath = normalizePath(error?.config?.url ?? "");
+
+            // login/register など認証系APIは画面側で扱う（誤爆防止）
+            if (isAuthApiPath(requestPath)) {
+                return Promise.reject(error);
+            }
+
             const token = getAuthToken();
 
             // token が無いなら「未ログイン」なので、静かに401を返す（画面側で判断させる）
@@ -121,17 +139,18 @@ api.interceptors.response.use(
             // token があるのに401 => 期限切れ/失効/無効。tokenを破棄してログインへ。
             clearAuthToken();
 
-            redirecting = true;
             const redirect = window.location.pathname + window.location.search;
 
             console.warn(
                 `[axios] 401 (req:${requestPath}) -> clear token and redirect to /login`
             );
 
+            redirecting = true;
             window.location.href =
                 "/login?redirect=" + encodeURIComponent(redirect);
 
-            return;
+            // ★ Promise を未解決のままにしない
+            return Promise.reject(error);
         }
 
         return Promise.reject(error);

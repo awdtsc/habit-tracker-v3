@@ -19,9 +19,9 @@ class TodayService
     {
         $tz = 'Asia/Tokyo';
 
-        $today      = Carbon::now($tz)->toDateString();
         $now        = Carbon::now($tz);
-        $isoWeekday = Carbon::now($tz)->isoWeekday(); // 1..7
+        $today      = $now->toDateString();
+        $todayDate  = $now->copy();
 
         $nowSlot  = $this->detectNowSlot($now);
         $nextSlot = $this->detectNextSlot($nowSlot);
@@ -35,7 +35,8 @@ class TodayService
             ->orderBy('time_slot')
             ->orderBy('id')
             ->get()
-            ->filter(fn (HabitTime $t) => $t->habit && $this->isHabitScheduledOn($t->habit, $isoWeekday))
+            // ★重要: days_of_week だけでなく Habit::isScheduledFor を使う
+            ->filter(fn (HabitTime $t) => $t->habit && $this->isHabitScheduledOn($t->habit, $todayDate))
             ->values();
 
         $habitTimeIds = $habitTimes->pluck('id')->all();
@@ -239,7 +240,9 @@ class TodayService
         }
 
         $slot = (int) $habitTime->time_slot;
-        if ($slot === 0) return false;
+
+        // anytime は「今の時間帯」に縛られないので常に操作可能
+        if ($slot === 0) return true;
 
         return $slot <= $nowSlot;
     }
@@ -267,21 +270,10 @@ class TodayService
     }
 
     /* =========================
-     * 曜日スケジュール判定
+     * スケジュール判定（Habit::isScheduledFor を使用）
      * ========================= */
-    private function isHabitScheduledOn(Habit $habit, int $isoWeekday): bool
+    private function isHabitScheduledOn(Habit $habit, Carbon $date): bool
     {
-        $days = $this->normalizeJsonArray($habit->days_of_week);
-        return count($days) === 0 ? true : in_array($isoWeekday, $days, true);
-    }
-
-    private function normalizeJsonArray($value): array
-    {
-        if (is_array($value)) return $value;
-        if (is_string($value) && $value !== '') {
-            $decoded = json_decode($value, true);
-            return is_array($decoded) ? $decoded : [];
-        }
-        return [];
+        return $habit->isScheduledFor($date);
     }
 }

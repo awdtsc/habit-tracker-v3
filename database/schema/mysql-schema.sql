@@ -54,7 +54,7 @@ CREATE TABLE `habit_logs` (
   `note` text DEFAULT NULL,
   `created_at` timestamp NULL DEFAULT NULL,
   `updated_at` timestamp NULL DEFAULT NULL,
-  `habit_time_id` bigint(20) unsigned DEFAULT NULL,
+  `habit_time_id` bigint(20) unsigned NOT NULL,
   PRIMARY KEY (`id`),
   UNIQUE KEY `habit_logs_user_habit_time_date_unique` (`user_id`,`habit_time_id`,`date`),
   KEY `habit_logs_habit_time_id_foreign` (`habit_time_id`),
@@ -296,3 +296,5 @@ INSERT INTO `migrations` (`id`, `migration`, `batch`) VALUES (37,'2025_12_20_101
 INSERT INTO `migrations` (`id`, `migration`, `batch`) VALUES (38,'2025_12_04_062445_create_personal_access_tokens_table',6);
 INSERT INTO `migrations` (`id`, `migration`, `batch`) VALUES (39,'2025_12_23_102618_drop_legacy_unique_on_habit_logs',7);
 INSERT INTO `migrations` (`id`, `migration`, `batch`) VALUES (40,'2025_12_26_103624_change_habit_logs_unique_to_user_habit_time_date',8);
+INSERT INTO `migrations` (`id`, `migration`, `batch`) VALUES (41,'2026_01_06_134906_make_habit_time_id_not_nullable_on_habit_logs',9);
+INSERT INTO `migrations` (`id`, `migration`, `batch`) VALUES (42,'2026_01_06_135805_make_habit_time_id_not_nullable_on_habit_logs',10);

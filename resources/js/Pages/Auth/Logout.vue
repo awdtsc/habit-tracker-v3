@@ -16,7 +16,8 @@ logout();
 
 async function logout() {
   try {
-    await api.post("/logout");
+    // ★ここだけ変更：/api/v1/auth/logout に当てる（api の baseURL が /api/v1 前提）
+    await api.post("/auth/logout");
     console.info("[logout] OK");
   } catch (e) {
     console.error("[logout error]", e);

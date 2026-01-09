@@ -33,12 +33,25 @@ class SecurityHeaders
 
     private function buildCsp(): string
     {
-        // 追加許可（dev用）：prodでは .env を空にすれば一切入らない
-        $extraHttp = $this->sanitizeSources((string) env('CSP_EXTRA_HTTP', '')); // 例: "http://127.0.0.1:5173 http://localhost:5173"
-        $extraWs   = $this->sanitizeSources((string) env('CSP_EXTRA_WS', ''));   // 例: "ws://127.0.0.1:5173 ws://localhost:5173"
+        // ★本番はコード側で強制的に締める（.env事故で unsafe-* / dev origin が混入しないように）
+        $isProd = app()->environment('production');
 
-        $allowStyleInline = filter_var(env('CSP_STYLE_UNSAFE_INLINE', 'false'), FILTER_VALIDATE_BOOL);
-        $allowScriptEval  = filter_var(env('CSP_SCRIPT_UNSAFE_EVAL', 'false'), FILTER_VALIDATE_BOOL);
+        // 追加許可（dev用）：prod では強制無効
+        $extraHttp = $isProd
+            ? []
+            : $this->sanitizeSources((string) env('CSP_EXTRA_HTTP', '')); // 例: "http://127.0.0.1:5173 http://localhost:5173"
+        $extraWs = $isProd
+            ? []
+            : $this->sanitizeSources((string) env('CSP_EXTRA_WS', ''));   // 例: "ws://127.0.0.1:5173 ws://localhost:5173"
+
+        // unsafe-*：prod では強制 false
+        $allowStyleInline = $isProd
+            ? false
+            : filter_var(env('CSP_STYLE_UNSAFE_INLINE', 'false'), FILTER_VALIDATE_BOOL);
+
+        $allowScriptEval = $isProd
+            ? false
+            : filter_var(env('CSP_SCRIPT_UNSAFE_EVAL', 'false'), FILTER_VALIDATE_BOOL);
 
         $scriptTokens = array_merge(
             ["'self'"],
@@ -83,7 +96,7 @@ class SecurityHeaders
     /**
      * CSP source の簡易サニタイズ
      * - 空/カンマ/スペース区切りを受ける
-     * - http(s) / ws(s) URL と 'self' 等のキーワードのみ残す
+     * - http(s) / ws(s) URL のみ残す
      */
     private function sanitizeSources(string $raw): array
     {
@@ -100,13 +113,11 @@ class SecurityHeaders
             $isHttp = preg_match('#^https?://[A-Za-z0-9\.\-\[\]:]+(:\d+)?$#', $p) === 1;
             $isWs   = preg_match('#^wss?://[A-Za-z0-9\.\-\[\]:]+(:\d+)?$#', $p) === 1;
 
-            // キーワードはここでは許可しない（keywordsは別で組み立てる方針）
             if ($isHttp || $isWs) {
                 $out[] = $p;
             }
         }
 
-        // 重複排除
         return array_values(array_unique($out));
     }
 }

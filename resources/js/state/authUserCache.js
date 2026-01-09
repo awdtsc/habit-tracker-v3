@@ -11,7 +11,7 @@
 //------------------------------------------------------------
 
 import axios from "axios";
-import { getAuthToken } from "@/axios";
+import { getAuthToken, clearAuthToken } from "@/axios";
 
 // 安全寄りなら短め推奨：5〜15秒
 export const USER_TTL_MS = 10_000;
@@ -59,6 +59,8 @@ async function fetchUserFromApi() {
         const status = e?.response?.status ?? 0;
 
         if (status === 401) {
+            // ★修正：401は「無効token確定」なので token を即破棄してループ/無駄リクエストを防ぐ
+            clearAuthToken();
             cachedUser = null;
             cachedAt = Date.now();
             return null;

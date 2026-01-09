@@ -81,7 +81,8 @@ export function useWeekToggle(daysRef) {
 
         try {
             const { data } = await api.post(
-                `/api/habits/${habit.id}/toggle`,
+                // ★修正：baseURL(/api/v1) に乗せる。/api を二重にしない
+                `/habits/${habit.id}/toggle`,
                 payload
             );
 

@@ -63,6 +63,7 @@ import { ref } from "vue";
 import { cookieLogin, cookieMe } from "@/axios";
 import { useRouter } from "vue-router";
 import { clearUserCache, getUser } from "@/state/authUserCache";
+import { safeRedirect } from "@/utils/safeRedirect";
 
 const email = ref("");
 const password = ref("");
@@ -70,29 +71,6 @@ const router = useRouter();
 
 const busy = ref(false);
 const debugMsg = ref("");
-
-/**
- * Open-redirect 対策（内部パスのみ許可）
- */
-function safeRedirect(raw, fallback = "/today") {
-  if (typeof raw !== "string" || raw.length === 0) return fallback;
-
-  let v = raw;
-  try {
-    v = decodeURIComponent(raw);
-  } catch {
-    v = raw;
-  }
-
-  if (!v.startsWith("/")) return fallback;
-  if (v.startsWith("//")) return fallback;
-  if (v.includes("\n") || v.includes("\r")) return fallback;
-
-  // login後の redirect に /logout を許可しない
-  if (v === "/logout" || v.startsWith("/logout/")) return fallback;
-
-  return v;
-}
 
 async function submit() {
   if (busy.value) return;
@@ -128,8 +106,10 @@ async function submit() {
       // ignore
     }
 
-    const rawRedirect = router.currentRoute.value.query.redirect;
+    const q = router.currentRoute.value.query.redirect;
+    const rawRedirect = typeof q === "string" ? q : "";
     const redirect = safeRedirect(rawRedirect, "/today");
+
     await router.replace(redirect);
   } catch (e) {
     console.error("[login error cookie-only]", e);

@@ -5,6 +5,7 @@
 // ポイント:
 // - beforeEach: 認証が必要なページだけ判定
 // - AUTH_UNKNOWN(ネットワーク/5xx等)は誤爆ログアウトを避けて通す
+// - /me 連打を抑制（hasConfirmedAuthState + getUserCacheAgeMs）
 //
 // M1: Open-redirect 対策:
 // - login/register の redirect query は「内部パスのみ」許可
@@ -16,45 +17,18 @@ import { createRouter, createWebHistory } from "vue-router";
 import {
     getUser,
     getCachedUser,
+    hasConfirmedAuthState,
     getUserCacheAgeMs,
     USER_TTL_MS,
     isAuthUnknown,
 } from "@/state/authUserCache";
 
+// ★ 共通 sanitizer
+import { safeRedirect } from "@/utils/safeRedirect";
+
 // ★ Today/Week eager
 import TodayPage from "@/Pages/Today.vue";
 import WeeklyPage from "@/Pages/Weekly.vue";
-
-// ------------------------------------------------------------
-//  M1: redirect query sanitizer（内部パスのみ許可）
-// ------------------------------------------------------------
-function safeRedirect(raw, fallback = null) {
-    if (typeof raw !== "string" || raw.length === 0) return fallback;
-
-    // 過剰な長さは拒否（ログインリンク悪用/メモリ圧迫の保険）
-    if (raw.length > 1024) return fallback;
-
-    let v = raw;
-    try {
-        v = decodeURIComponent(raw);
-    } catch {
-        v = raw;
-    }
-
-    // 内部パスのみ
-    if (!v.startsWith("/")) return fallback;
-
-    // スキーム相対URL（//evil.com）拒否
-    if (v.startsWith("//")) return fallback;
-
-    // 改行等の混入拒否
-    if (v.includes("\n") || v.includes("\r")) return fallback;
-
-    // ★事故防止：login後の redirect に /logout を許可しない
-    if (v === "/logout" || v.startsWith("/logout/")) return fallback;
-
-    return v;
-}
 
 // ------------------------------------------------------------
 //  Routes
@@ -141,12 +115,12 @@ router.beforeEach(async (to) => {
     // --------------------------------------------------------
     if (to.meta.public) {
         // ログイン済みで login/register に来たら追い返す（体験改善）
-        // ※ AUTH_UNKNOWN(Symbol) を truthy 判定で誤爆させない
+        // ただし /login 上で /me を強制fetchすると「ログアウト直後の401」が目立つので、
+        // キャッシュがある時だけ追い返す（ノイズ削減）
         if (to.name === "login" || to.name === "register") {
             const cached = getCachedUser();
-            if (cached && !isAuthUnknown(cached)) {
-                return { name: "today" };
-            }
+            // AUTH_UNKNOWN(Symbol) を truthy 扱いして誤爆させない
+            if (cached && !isAuthUnknown(cached)) return { name: "today" };
         }
         return true;
     }
@@ -154,11 +128,14 @@ router.beforeEach(async (to) => {
     // 認証不要ルート（保険）
     if (!to.meta.requiresAuth) return true;
 
-    // ここは getUser() が TTL + inflight + unknownバックオフ を持っているので
-    // 余計な「/me 連打抑制」は不要（シンプルにする）
+    // /me 連打抑制
+    if (!hasConfirmedAuthState() && getUserCacheAgeMs() < USER_TTL_MS) {
+        return true;
+    }
+
     const user = await getUser({ force: false });
 
-    if (isAuthUnknown(user)) return true; // ネットワーク不調等は通す（誤爆防止）
+    if (isAuthUnknown(user)) return true;
     if (user) return true;
 
     const redirect = safeRedirect(to.fullPath, "/today");
@@ -171,14 +148,10 @@ router.beforeEach(async (to) => {
 
 // ------------------------------------------------------------
 //  背景でサイレント再検証（安全性）
-//  - “ログイン済みっぽい時だけ” 更新（未ログイン/unknownで連打しない）
 // ------------------------------------------------------------
 router.afterEach((to) => {
     if (to.meta.public) return;
     if (!to.meta.requiresAuth) return;
-
-    const cached = getCachedUser();
-    if (!cached || isAuthUnknown(cached)) return;
 
     const age = getUserCacheAgeMs();
     if (age > USER_TTL_MS / 2) {

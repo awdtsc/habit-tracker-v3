@@ -1,14 +1,12 @@
 // resources/js/router/index.js
 //------------------------------------------------------------
-// Vue Router（Bearer Token）— 高速 + 安全（/api/v1/auth/me TTL）
+// Vue Router（Cookie + Bearer 共存）— 高速 + 安全（/api/v1/auth/me TTL）
 //
 // ポイント:
 // - beforeEach: 認証が必要なページだけ判定
 // - AUTH_UNKNOWN(ネットワーク/5xx等)は誤爆ログアウトを避けて通す
-// - ただし AUTH_UNKNOWN 直後に /me を連打しない
-//   → hasConfirmedAuthState() と getUserCacheAgeMs() で抑制
 //
-// 追加 (M1: Open-redirect 対策):
+// M1: Open-redirect 対策:
 // - login/register の redirect query は「内部パスのみ」許可
 // - 不正なら query を掃除してから画面表示
 // - guard が付与する redirect も内部パスに正規化
@@ -18,13 +16,10 @@ import { createRouter, createWebHistory } from "vue-router";
 import {
     getUser,
     getCachedUser,
-    hasConfirmedAuthState,
     getUserCacheAgeMs,
     USER_TTL_MS,
     isAuthUnknown,
 } from "@/state/authUserCache";
-
-import { getAuthToken } from "@/axios";
 
 // ★ Today/Week eager
 import TodayPage from "@/Pages/Today.vue";
@@ -54,6 +49,9 @@ function safeRedirect(raw, fallback = null) {
 
     // 改行等の混入拒否
     if (v.includes("\n") || v.includes("\r")) return fallback;
+
+    // ★事故防止：login後の redirect に /logout を許可しない
+    if (v === "/logout" || v.startsWith("/logout/")) return fallback;
 
     return v;
 }
@@ -101,14 +99,14 @@ const routes = [
         path: "/logout",
         name: "logout",
         component: () => import("../Pages/Auth/Logout.vue"),
-        meta: { requiresAuth: true },
+        meta: { public: true }, // logoutはpublic
     },
 
     {
         path: "/:pathMatch(.*)*",
         name: "not-found",
         component: () => import("../Pages/NotFound.vue"),
-        meta: { public: true }, // ★ 404はpublic扱いの方が事故が少ない
+        meta: { public: true },
     },
 ];
 
@@ -123,15 +121,9 @@ const router = createRouter({
 // ------------------------------------------------------------
 //  Auth Guard
 // ------------------------------------------------------------
-// - publicは常に通す
-// - requiresAuth のみチェック
-// - AUTH_UNKNOWN は通す（誤爆ログアウト回避）
-// - AUTH_UNKNOWN直後に /me を連打しない（オフライン等）
-// ------------------------------------------------------------
 router.beforeEach(async (to) => {
     // --------------------------------------------------------
     // M1: login/register の redirect query を先に掃除
-    // - 外部URL等が入っていたら query ごと落として同一画面へ
     // --------------------------------------------------------
     if (to.name === "login" || to.name === "register") {
         const raw = to.query?.redirect;
@@ -144,50 +136,31 @@ router.beforeEach(async (to) => {
         }
     }
 
+    // --------------------------------------------------------
     // public route
+    // --------------------------------------------------------
     if (to.meta.public) {
         // ログイン済みで login/register に来たら追い返す（体験改善）
+        // ※ AUTH_UNKNOWN(Symbol) を truthy 判定で誤爆させない
         if (to.name === "login" || to.name === "register") {
-            // まず軽い判定：tokenが無ければ未ログイン
-            const token = getAuthToken();
-            if (!token) return true;
-
-            // tokenがあるなら、キャッシュがあればそれで即判定
             const cached = getCachedUser();
-            if (cached) return { name: "today" };
-
-            // キャッシュが無い場合は、1回だけ強制確認してから判断（UX改善）
-            const v = await getUser({ force: true });
-            if (!isAuthUnknown(v) && v) {
+            if (cached && !isAuthUnknown(cached)) {
                 return { name: "today" };
             }
         }
         return true;
     }
 
-    // 認証不要ルート（現状ほぼ無いけど保険）
+    // 認証不要ルート（保険）
     if (!to.meta.requiresAuth) return true;
 
-    // ★ 「確定状態がまだ一度も取れていない」かつ
-    // ★ 「直近で /me を確認しに行っている（=AUTH_UNKNOWN の可能性が高い）」
-    // → beforeEach で /me を連打しないため、今回は叩かず通す
-    if (!hasConfirmedAuthState() && getUserCacheAgeMs() < USER_TTL_MS) {
-        return true;
-    }
-
+    // ここは getUser() が TTL + inflight + unknownバックオフ を持っているので
+    // 余計な「/me 連打抑制」は不要（シンプルにする）
     const user = await getUser({ force: false });
 
-    if (isAuthUnknown(user)) {
-        // ネットワーク不調など：誤爆ログアウトを避けるため通す
-        return true;
-    }
-
+    if (isAuthUnknown(user)) return true; // ネットワーク不調等は通す（誤爆防止）
     if (user) return true;
 
-    // --------------------------------------------------------
-    // 未ログイン → loginへ
-    // redirect は内部パスのみ（念のため正規化）
-    // --------------------------------------------------------
     const redirect = safeRedirect(to.fullPath, "/today");
 
     return {
@@ -198,13 +171,14 @@ router.beforeEach(async (to) => {
 
 // ------------------------------------------------------------
 //  背景でサイレント再検証（安全性）
-// ------------------------------------------------------------
-// - 遷移は止めない
-// - TTLの半分を過ぎたら裏で更新（ただしpublic/非requiresAuthは除外）
+//  - “ログイン済みっぽい時だけ” 更新（未ログイン/unknownで連打しない）
 // ------------------------------------------------------------
 router.afterEach((to) => {
     if (to.meta.public) return;
     if (!to.meta.requiresAuth) return;
+
+    const cached = getCachedUser();
+    if (!cached || isAuthUnknown(cached)) return;
 
     const age = getUserCacheAgeMs();
     if (age > USER_TTL_MS / 2) {

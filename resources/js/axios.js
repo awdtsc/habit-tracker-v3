@@ -1,26 +1,35 @@
 // resources/js/axios.js
 //------------------------------------------------------------
-// Axios 設定（Bearer Token 認証用）
+// Axios 設定（SPA: Cookie/Session を正、Mobile: Bearer token を別途運用）
 //
-// - Cookie/Session/CSRF に依存しない（withCredentials しない）
-// - Authorization: Bearer <token> を自動付与
-// - 401 は token を破棄して /login へ（必要なら redirect パラメータ付き）
+// SPA（ブラウザ）:
+// - Cookie/Session + CSRF を正とする（withCredentials: true）
+// - initCsrf() で /sanctum/csrf-cookie を取得してPOST系を安定化
+//
+// Mobile（将来）:
+// - Authorization: Bearer <token> を使う（Sanctum PAT）
+// - token保存(get/set/clear)は残す（ただしSPAは使わない）
 //
 // 重要:
-// - 旧Cookie方式の互換のため initCsrf() は no-op で残す
+// - 401時の自動リダイレクトは「tokenがある時だけ」行う（モバイル想定）
+//   SPA側はrouter/authUserCacheで制御する
 //------------------------------------------------------------
 
 import axios from "axios";
 
+/**
+ * Cookie(Session) 認証を有効にするフラグ（Vite .env）
+ * - VITE_COOKIE_AUTH=true のときだけ Cookie 系の初期化を行う
+ */
+export const COOKIE_AUTH_ENABLED = import.meta.env.VITE_COOKIE_AUTH === "true";
+
 // -------------------------------
-// Token storage
+// Token storage (Mobile / optional)
 // -------------------------------
 const TOKEN_KEY = "auth_token";
 
 /**
- * localStorage -> sessionStorage へ一度だけ移行する（UX維持のため）
- * - すでに sessionStorage に token があるなら何もしない
- * - session が空で local に token があれば、session に移して local を消す
+ * localStorage -> sessionStorage へ一度だけ移行する（互換のため残す）
  */
 function migrateLocalToSessionOnce() {
     try {
@@ -48,14 +57,12 @@ export function getAuthToken() {
 
 export function setAuthToken(token) {
     try {
-        // ★falsy（null/undefined/空文字）は「削除」扱いにする
         if (!token) {
             sessionStorage.removeItem(TOKEN_KEY);
             return;
         }
         sessionStorage.setItem(TOKEN_KEY, token);
 
-        // 念のため local に残ってたら消す（混乱防止）
         try {
             localStorage.removeItem(TOKEN_KEY);
         } catch {
@@ -69,7 +76,6 @@ export function setAuthToken(token) {
 export function clearAuthToken() {
     try {
         sessionStorage.removeItem(TOKEN_KEY);
-        // 念のため local に残ってたら消す（混乱防止）
         try {
             localStorage.removeItem(TOKEN_KEY);
         } catch {
@@ -81,21 +87,31 @@ export function clearAuthToken() {
 }
 
 // -------------------------------
-// API client
+// API client (SPA: Cookie is primary)
 // -------------------------------
 const api = axios.create({
-    // Bearer統一なら v1 を基本にする
     baseURL: "/api/v1",
-    withCredentials: false,
+    withCredentials: true, // ★SPAは常にCookieを送る（同一オリジン前提）
     headers: {
         "X-Requested-With": "XMLHttpRequest",
         Accept: "application/json",
     },
 });
 
-// 旧Cookie方式で必要だったが、Bearer方式では不要（互換のため残す）
+/**
+ * CSRF cookie を取得（SPA起動時に1回呼ぶ）
+ * - CookieモードOFFのときは何もしない（誤爆防止）
+ */
 export async function initCsrf() {
-    return;
+    if (!COOKIE_AUTH_ENABLED) return;
+
+    await axios.get("/sanctum/csrf-cookie", {
+        withCredentials: true,
+        headers: {
+            "X-Requested-With": "XMLHttpRequest",
+            Accept: "application/json",
+        },
+    });
 }
 
 // ------------------------------------------------------------
@@ -115,7 +131,6 @@ function isAuthPagePath(pathname) {
     return pathname === "/login" || pathname === "/register";
 }
 
-// 「認証系API」は interceptor で強制リダイレクトしない（誤爆防止）
 function isAuthApiPath(pathname) {
     return (
         pathname.startsWith("/api/v1/auth/") ||
@@ -126,7 +141,8 @@ function isAuthApiPath(pathname) {
 let redirecting = false;
 
 // ------------------------------------------------------------
-// Request Interceptor（Bearer付与）
+// Request Interceptor（Bearer付与：tokenがある場合のみ）
+// - SPAはtokenを使わない想定。将来のMobile用途のために残す。
 // ------------------------------------------------------------
 api.interceptors.request.use(
     (config) => {
@@ -144,6 +160,8 @@ api.interceptors.request.use(
 
 // ------------------------------------------------------------
 // Response Interceptor（401処理）
+// - tokenがある場合のみ「token失効→/loginへ」
+// - tokenが無い場合は静かに返す（SPAはrouter側で制御）
 // ------------------------------------------------------------
 api.interceptors.response.use(
     (res) => res,
@@ -153,26 +171,24 @@ api.interceptors.response.use(
         if (status === 401) {
             const currentPath = window.location.pathname;
 
-            // authページでは飛ばさない（無限ループ回避）
             if (redirecting || isAuthPagePath(currentPath)) {
                 return Promise.reject(error);
             }
 
             const requestPath = normalizePath(error?.config?.url ?? "");
 
-            // login/register など認証系APIは画面側で扱う（誤爆防止）
             if (isAuthApiPath(requestPath)) {
                 return Promise.reject(error);
             }
 
             const token = getAuthToken();
 
-            // token が無いなら「未ログイン」なので、静かに401を返す（画面側で判断させる）
+            // token無し（SPA）なら、ここでは何もしない
             if (!token) {
                 return Promise.reject(error);
             }
 
-            // token があるのに401 => 期限切れ/失効/無効。tokenを破棄してログインへ。
+            // tokenあり（モバイル想定）なら、失効扱いでログインへ
             clearAuthToken();
 
             const redirect = window.location.pathname + window.location.search;
@@ -191,5 +207,55 @@ api.interceptors.response.use(
         return Promise.reject(error);
     }
 );
+
+// ============================================================================
+// Cookie(Session) Auth helpers (SPA)
+// ============================================================================
+
+async function ensureCsrfCookie() {
+    // cookie系APIを叩くときはCSRF必須（CookieモードON前提）
+    await initCsrf();
+}
+
+export async function cookieLogin({ email, password }) {
+    await ensureCsrfCookie();
+
+    const res = await axios.post(
+        "/auth/cookie/login",
+        { email, password },
+        {
+            withCredentials: true,
+            headers: {
+                "X-Requested-With": "XMLHttpRequest",
+                Accept: "application/json",
+            },
+        }
+    );
+    return res.data;
+}
+
+export async function cookieMe() {
+    const res = await axios.get("/auth/cookie/me", {
+        withCredentials: true,
+        headers: {
+            "X-Requested-With": "XMLHttpRequest",
+            Accept: "application/json",
+        },
+    });
+    return res.data;
+}
+
+export async function cookieLogout() {
+    await ensureCsrfCookie();
+
+    const res = await axios.post("/auth/cookie/logout", null, {
+        withCredentials: true,
+        headers: {
+            "X-Requested-With": "XMLHttpRequest",
+            Accept: "application/json",
+        },
+    });
+    return res.data;
+}
 
 export default api;

@@ -1,71 +1,97 @@
 // resources/js/state/authUserCache.js
 //------------------------------------------------------------
 // /api/v1/auth/me キャッシュ（TTL + inflight共有）
-// - Bearer token 前提（Cookie/CSRFに依存しない）
-// - API呼び出しは “素のaxios” で行う（apiインスタンスのinterceptorを踏まない）
+// - BearerでもCookieでも「/api/v1/auth/me が200ならログイン済み」と判定する
+// - tokenが無いだけで未ログイン確定にしない（Cookie運用で詰むため）
 //
 // return:
-// - {id:...} : 認証OK
-// - null     : 未認証確定（401）
-// - AUTH_UNKNOWN : 未確定（ネットワーク/5xx等）
+// - user object : 認証OK
+// - null        : 未認証確定（401）
+// - AUTH_UNKNOWN: 未確定（ネットワーク/5xx等）
+//
+// 改善:
+// - AUTH_UNKNOWN も短時間だけキャッシュして /me 連打を抑止（回線断・一時障害対策）
 //------------------------------------------------------------
 
 import axios from "axios";
 import { getAuthToken, clearAuthToken } from "@/axios";
 
-// 安全寄りなら短め推奨：5〜15秒
+// 確定（user / null）のTTL
 export const USER_TTL_MS = 10_000;
 
-// ★ /me の確認が「失敗しただけ」で未認証扱いにしないための sentinel
+// 未確定（AUTH_UNKNOWN）のバックオフTTL（短め）
+export const UNKNOWN_TTL_MS = 2_000;
+
 export const AUTH_UNKNOWN = Symbol("AUTH_UNKNOWN");
 export function isAuthUnknown(v) {
     return v === AUTH_UNKNOWN;
 }
 
-let cachedUser = null; // {id:...} or null
-let cachedAt = 0; // 「認証状態が確定した」時刻（200/401のときだけ更新）
+let cachedUser = null; // user | null | AUTH_UNKNOWN
+let cachedAt = 0; // 何らかの結果をキャッシュした時刻（unknown含む）
+let confirmedAt = 0; // 確定結果（user/null）のみの時刻
 let inflight = null;
-
-// ★「確認を試みた」時刻（200/401/ネットワーク/5xx すべてで更新）
 let lastCheckAt = 0;
+
+function normalizeUser(data) {
+    const u = data?.user ?? data ?? null;
+    if (!u) return null;
+    return u?.id ? u : null;
+}
+
+function setCache(value, { confirmed = false } = {}) {
+    cachedUser = value;
+    cachedAt = Date.now();
+    if (confirmed) confirmedAt = cachedAt;
+}
+
+function cacheFresh(now) {
+    if (!cachedAt) return false;
+
+    const ttl = isAuthUnknown(cachedUser) ? UNKNOWN_TTL_MS : USER_TTL_MS;
+    return now - cachedAt < ttl;
+}
 
 async function fetchUserFromApi() {
     lastCheckAt = Date.now();
 
     const token = getAuthToken();
-
-    // token が無いなら、ここで未認証確定として扱ってよい（401を取りに行かない）
-    if (!token) {
-        cachedUser = null;
-        cachedAt = Date.now();
-        return null;
-    }
+    const hasBearerToken = !!token;
 
     try {
         const res = await axios.get("/api/v1/auth/me", {
+            withCredentials: true,
             headers: {
                 "X-Requested-With": "XMLHttpRequest",
                 Accept: "application/json",
-                Authorization: `Bearer ${token}`,
+                ...(hasBearerToken ? { Authorization: `Bearer ${token}` } : {}),
             },
         });
 
-        const user = res.data && res.data.id ? res.data : null;
+        const user = normalizeUser(res.data);
 
-        cachedUser = user;
-        cachedAt = Date.now();
+        // 200でも user が取れないなら unknown 扱い（サーバ契約ズレ対策）
+        if (!user) {
+            setCache(AUTH_UNKNOWN, { confirmed: false });
+            return AUTH_UNKNOWN;
+        }
+
+        setCache(user, { confirmed: true });
         return user;
     } catch (e) {
         const status = e?.response?.status ?? 0;
 
         if (status === 401) {
-            // ★修正：401は「無効token確定」なので token を即破棄してループ/無駄リクエストを防ぐ
-            clearAuthToken();
-            cachedUser = null;
-            cachedAt = Date.now();
+            // Bearerで401ならtoken無効確定なので破棄
+            if (hasBearerToken) clearAuthToken();
+
+            // 未認証確定としてキャッシュ
+            setCache(null, { confirmed: true });
             return null;
         }
 
+        // ネットワーク断/5xx等は未確定（ただし短時間キャッシュして連打を抑止）
+        setCache(AUTH_UNKNOWN, { confirmed: false });
         return AUTH_UNKNOWN;
     }
 }
@@ -73,7 +99,7 @@ async function fetchUserFromApi() {
 export async function getUser({ force = false } = {}) {
     const now = Date.now();
 
-    if (!force && cachedAt && now - cachedAt < USER_TTL_MS) {
+    if (!force && cacheFresh(now)) {
         return cachedUser;
     }
 
@@ -90,13 +116,15 @@ export function getCachedUser() {
     return cachedUser;
 }
 
+// 「確定（user or null）を一度でも取れたか」だけを返す（unknownは含めない）
 export function hasConfirmedAuthState() {
-    return !!cachedAt;
+    return !!confirmedAt;
 }
 
 export function clearUserCache() {
     cachedUser = null;
     cachedAt = 0;
+    confirmedAt = 0;
     inflight = null;
     lastCheckAt = 0;
 }

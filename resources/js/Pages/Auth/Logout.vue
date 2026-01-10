@@ -6,25 +6,31 @@
 </template>
 
 <script setup>
+import { onMounted } from "vue";
 import api, { clearAuthToken } from "@/axios";
 import { useRouter } from "vue-router";
 import { clearUserCache } from "@/state/authUserCache";
 
 const router = useRouter();
 
-logout();
+onMounted(() => {
+  logout();
+});
 
 async function logout() {
   try {
-    // ★ここだけ変更：/api/v1/auth/logout に当てる（api の baseURL が /api/v1 前提）
+    // /api/v1/auth/logout（api.baseURL="/api/v1" 前提）
     await api.post("/auth/logout");
     console.info("[logout] OK");
   } catch (e) {
-    console.error("[logout error]", e);
+    // ログアウトは冪等でOK：失敗してもクライアント状態は消してログインへ
+    console.warn("[logout] failed (ignore and continue)", e);
   } finally {
     clearAuthToken();
     clearUserCache();
-    router.replace("/login");
+
+    // redirectクエリ等は持ち越さない（事故防止）
+    await router.replace({ name: "login", query: {} });
   }
 }
 </script>

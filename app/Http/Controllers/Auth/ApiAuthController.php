@@ -7,6 +7,7 @@ namespace App\Http\Controllers\Auth;
 use App\Http\Controllers\Controller;
 use App\Models\User;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Validation\ValidationException;
 
@@ -73,34 +74,64 @@ class ApiAuthController extends Controller
 
     /**
      * GET /api/v1/auth/me (auth:sanctum)
+     * return: { user }
      */
     public function me(Request $request)
     {
-        return response()->json($request->user());
+        return response()->json([
+            'user' => $request->user(),
+        ]);
     }
 
     /**
      * POST /api/v1/auth/logout (auth:sanctum)
      * body: { all?: boolean }
      *
-     * all=true: 全トークン破棄（全端末ログアウト）
-     * all=false: 今のトークンだけ破棄
+     * all=true : 全トークン破棄（全端末ログアウト想定）
+     * all=false: 今のトークンだけ破棄（Bearerの場合）
+     *
+     * Cookieログイン時（currentAccessToken=null）でも必ず落ちずに成功する。
      */
     public function logout(Request $request)
     {
         $user = $request->user();
+
+        // 未認証でも冪等にOK
         if (!$user) {
-            return response()->json(['message' => 'Unauthenticated'], 401);
+            return response()->json(['ok' => true]);
         }
 
-        $all = (bool) $request->input('all', false);
+        $all = $request->boolean('all', false);
 
-        if ($all) {
-            $user->tokens()->delete();
-        } else {
-            $token = $user->currentAccessToken();
-            if ($token) {
-                $token->delete();
+        // 1) トークン（Bearer）側の処理
+        // Cookieログインでも「過去に発行したトークンを全部消したい(all=true)」はあり得るので対応
+        try {
+            if ($all) {
+                $user->tokens()->delete(); // 全トークン破棄
+            } else {
+                $token = $user->currentAccessToken();
+                if ($token) {
+                    $token->delete(); // 今のトークンだけ
+                }
+            }
+        } catch (\Throwable $e) {
+            // token削除は失敗してもログアウト処理は続行（冪等優先）
+        }
+
+        // 2) セッション（Cookie）側の処理
+        // Cookieログインの場合に効く。Bearerだけでも害はない。
+        try {
+            Auth::guard('web')->logout();
+        } catch (\Throwable $e) {
+            // ignore
+        }
+
+        if (method_exists($request, 'hasSession') && $request->hasSession()) {
+            try {
+                $request->session()->invalidate();
+                $request->session()->regenerateToken();
+            } catch (\Throwable $e) {
+                // ignore
             }
         }
 

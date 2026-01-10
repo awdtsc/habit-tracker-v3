@@ -17,20 +17,43 @@ return Application::configure(basePath: dirname(__DIR__))
 
         /*
         |--------------------------------------------------------------------------
-        | Web Middleware（SPA shell を返すだけ。Cookie/Session/CSRF は使わない）
+        | Web Middleware
         |--------------------------------------------------------------------------
+        | Phase 1（共存）で /auth/cookie/* を検証するため、web には Session/CSRF を戻す。
+        | ただし Bearer(/api) は壊さない。
         */
         $middleware->group('web', [
             \App\Http\Middleware\SecurityHeaders::class,
+
+            // Cookie / Session を成立させる最小セット
+            \Illuminate\Cookie\Middleware\EncryptCookies::class,
+            \Illuminate\Cookie\Middleware\AddQueuedCookiesToResponse::class,
+            \Illuminate\Session\Middleware\StartSession::class,
+
+            // ValidationExceptionなどの共有
+            \Illuminate\View\Middleware\ShareErrorsFromSession::class,
+
+            // CSRF（/sanctum/csrf-cookie と /auth/cookie/* のため）
+            \Illuminate\Foundation\Http\Middleware\ValidateCsrfToken::class,
+
             \Illuminate\Routing\Middleware\SubstituteBindings::class,
         ]);
 
         /*
         |--------------------------------------------------------------------------
-        | API Middleware（Stateless）
+        | API Middleware（Bearerを維持しつつ Cookie(Sanctum stateful) も通す）
         |--------------------------------------------------------------------------
+        | 重要:
+        | - Bearer(PAT) はそのまま動く（Authorizationヘッダ）
+        | - Cookieログイン済みの場合、Sanctumが「statefulなリクエスト」と判定できれば
+        |   auth:sanctum で Cookieセッションでも通せるようになる（Phase 2の入口）
+        |
+        | NOTE:
+        | - StartSession/CSRF は API に入れない（ここでは最小）
+        | - Cookieを送るにはフロント側で withCredentials が必要（次ステップ）
         */
         $middleware->group('api', [
+            \Laravel\Sanctum\Http\Middleware\EnsureFrontendRequestsAreStateful::class,
             \Illuminate\Http\Middleware\HandleCors::class,
             \Illuminate\Routing\Middleware\SubstituteBindings::class,
         ]);

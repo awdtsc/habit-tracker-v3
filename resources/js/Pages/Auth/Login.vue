@@ -125,11 +125,15 @@ async function submit() {
   } catch (e) {
     console.error("[login error]", e);
 
-    if (e.response?.status === 401) {
+    const status = e?.response?.status ?? 0;
+
+    // 401: Unauthorized / 422: ValidationException(資格情報ミスとして扱う実装) を同じ扱いにする
+    if (status === 401 || status === 422) {
       alert("メールまたはパスワードが違います");
-    } else {
-      alert("ログイン中にエラーが発生しました");
+      return;
     }
+
+    alert("ログイン中にエラーが発生しました");
   }
 }
 

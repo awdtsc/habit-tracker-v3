@@ -1,8 +1,10 @@
 <?php
 
+use Illuminate\Auth\AuthenticationException;
 use Illuminate\Foundation\Application;
 use Illuminate\Foundation\Configuration\Exceptions;
 use Illuminate\Foundation\Configuration\Middleware;
+use Illuminate\Http\Request;
 
 return Application::configure(basePath: dirname(__DIR__))
     ->withRouting(
@@ -17,12 +19,6 @@ return Application::configure(basePath: dirname(__DIR__))
         |--------------------------------------------------------------------------
         | Web Middleware（SPA shell を返すだけ。Cookie/Session/CSRF は使わない）
         |--------------------------------------------------------------------------
-        |
-        | このプロジェクトは API を Bearer トークンに統一するため、
-        | web 側で StartSession / CSRF / Sanctum stateful は不要。
-        |
-        | H2: CSP/セキュアヘッダ（XSS耐性の底上げ）
-        |
         */
         $middleware->group('web', [
             \App\Http\Middleware\SecurityHeaders::class,
@@ -33,12 +29,6 @@ return Application::configure(basePath: dirname(__DIR__))
         |--------------------------------------------------------------------------
         | API Middleware（Stateless）
         |--------------------------------------------------------------------------
-        |
-        | routes/api.php は自動で /api プレフィックスが付く想定。
-        | Bearer トークン認証は auth:sanctum をルート側で使用。
-        |
-        | M3: CORS を明示（別originのSPA配信/将来拡張に備える）
-        |
         */
         $middleware->group('api', [
             \Illuminate\Http\Middleware\HandleCors::class,
@@ -51,11 +41,16 @@ return Application::configure(basePath: dirname(__DIR__))
         |--------------------------------------------------------------------------
         */
         $middleware->alias([
-            // いったん残してもいいが、Bearer統一なら基本使わない
             // 'auth.api' => \App\Http\Middleware\EnsureApiAuthenticated::class,
         ]);
     })
     ->withExceptions(function (Exceptions $exceptions) {
-        //
+        // ★重要：/api/* は Accept ヘッダに依存せず常に JSON 401（302/HTML を禁止）
+        $exceptions->render(function (AuthenticationException $e, Request $request) {
+            if ($request->is('api/*')) {
+                return response()->json(['message' => 'Unauthenticated.'], 401);
+            }
+            return null; // web はデフォルト挙動に任せる（/login redirect 等）
+        });
     })
     ->create();

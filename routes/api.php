@@ -8,6 +8,9 @@ use App\Http\Controllers\WeekController;
 use App\Http\Controllers\HabitController;
 use App\Http\Controllers\HabitLogController;
 
+// ★Push
+use App\Http\Controllers\Api\V1\PushSubscriptionController;
+
 /*
 |--------------------------------------------------------------------------
 | API Routes (Bearer Token / Sanctum Personal Access Tokens)
@@ -37,12 +40,22 @@ Route::prefix('v1')->group(function () {
         Route::get('/auth/me',      [ApiAuthController::class, 'me']);
         Route::post('/auth/logout', [ApiAuthController::class, 'logout']);
 
-        // Today / Week
+        // Today / Week（★触らない＝ダッシュボード安全）
         Route::get('/today', [TodayController::class, 'show']);
         Route::get('/week',  [WeekController::class, 'show']);
 
-        // Habits / Logs
+        // Habits / Logs（★触らない）
         Route::post('/habits', [HabitController::class, 'store']);
         Route::post('/habits/{habit}/toggle', [HabitLogController::class, 'toggle']);
+
+        /*
+        |----------------------------------------------------------------------
+        | Push (protected)
+        |----------------------------------------------------------------------
+        */
+        Route::post('/push/subscribe', [PushSubscriptionController::class, 'subscribe']);
+
+        // ★追加：手動テスト通知
+        Route::post('/push/test', [PushSubscriptionController::class, 'test']);
     });
 });

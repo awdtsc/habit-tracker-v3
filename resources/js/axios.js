@@ -17,9 +17,30 @@ import axios from "axios";
 // -------------------------------
 const TOKEN_KEY = "auth_token";
 
+/**
+ * localStorage -> sessionStorage へ一度だけ移行する（UX維持のため）
+ * - すでに sessionStorage に token があるなら何もしない
+ * - session が空で local に token があれば、session に移して local を消す
+ */
+function migrateLocalToSessionOnce() {
+    try {
+        const sessionToken = sessionStorage.getItem(TOKEN_KEY);
+        if (sessionToken) return;
+
+        const localToken = localStorage.getItem(TOKEN_KEY);
+        if (!localToken) return;
+
+        sessionStorage.setItem(TOKEN_KEY, localToken);
+        localStorage.removeItem(TOKEN_KEY);
+    } catch {
+        // ignore
+    }
+}
+
 export function getAuthToken() {
     try {
-        return localStorage.getItem(TOKEN_KEY);
+        migrateLocalToSessionOnce();
+        return sessionStorage.getItem(TOKEN_KEY);
     } catch {
         return null;
     }
@@ -29,10 +50,17 @@ export function setAuthToken(token) {
     try {
         // ★falsy（null/undefined/空文字）は「削除」扱いにする
         if (!token) {
-            localStorage.removeItem(TOKEN_KEY);
+            sessionStorage.removeItem(TOKEN_KEY);
             return;
         }
-        localStorage.setItem(TOKEN_KEY, token);
+        sessionStorage.setItem(TOKEN_KEY, token);
+
+        // 念のため local に残ってたら消す（混乱防止）
+        try {
+            localStorage.removeItem(TOKEN_KEY);
+        } catch {
+            // ignore
+        }
     } catch {
         // ignore
     }
@@ -40,7 +68,13 @@ export function setAuthToken(token) {
 
 export function clearAuthToken() {
     try {
-        localStorage.removeItem(TOKEN_KEY);
+        sessionStorage.removeItem(TOKEN_KEY);
+        // 念のため local に残ってたら消す（混乱防止）
+        try {
+            localStorage.removeItem(TOKEN_KEY);
+        } catch {
+            // ignore
+        }
     } catch {
         // ignore
     }
@@ -100,6 +134,8 @@ api.interceptors.request.use(
         if (token) {
             config.headers = config.headers ?? {};
             config.headers.Authorization = `Bearer ${token}`;
+        } else if (config.headers && "Authorization" in config.headers) {
+            delete config.headers.Authorization;
         }
         return config;
     },
@@ -149,7 +185,6 @@ api.interceptors.response.use(
             window.location.href =
                 "/login?redirect=" + encodeURIComponent(redirect);
 
-            // ★ Promise を未解決のままにしない
             return Promise.reject(error);
         }
 

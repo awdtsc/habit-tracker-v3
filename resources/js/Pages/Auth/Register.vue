@@ -73,7 +73,7 @@
 
 <script setup>
 import { ref } from "vue";
-import api, { cookieLogin, cookieMe } from "@/axios";
+import { cookieRegister, cookieMe } from "@/axios";
 import { useRouter } from "vue-router";
 import { clearUserCache, getUser } from "@/state/authUserCache";
 import { safeRedirect } from "@/utils/safeRedirect";
@@ -101,15 +101,9 @@ async function submit() {
   try {
     console.log("[register] start (cookie-only)");
 
-    // 1) ユーザー作成（API: register は token も返すが SPAでは使わない）
-    await api.post("/auth/register", {
+    // 1) ユーザー作成 + Cookieログイン
+    await cookieRegister({
       name: name.value,
-      email: email.value,
-      password: password.value,
-    });
-
-    // 2) 直後にCookieログインしてセッション確立
-    await cookieLogin({
       email: email.value,
       password: password.value,
     });
@@ -117,7 +111,7 @@ async function submit() {
     const me = await cookieMe();
     debugMsg.value = `Cookie register+login OK: ${me?.user?.email ?? "unknown"}`;
 
-    // 3) ガード安定化
+    // 2) ガード安定化
     clearUserCache();
     const u = await getUser({ force: true });
     if (!u) {

@@ -31,6 +31,7 @@ Route::view('/login', 'app')->name('login');
 */
 Route::prefix('auth/cookie')->group(function () {
     Route::post('/login',  [CookieAuthController::class, 'login']);
+    Route::post('/register', [CookieAuthController::class, 'register']);
     Route::post('/logout', [CookieAuthController::class, 'logout']);
     Route::get('/me',      [CookieAuthController::class, 'me']);
 });

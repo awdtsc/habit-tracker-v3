@@ -212,12 +212,21 @@ api.interceptors.response.use(
 // Cookie(Session) Auth helpers (SPA)
 // ============================================================================
 
+function assertCookieModeEnabled(fnName) {
+    if (COOKIE_AUTH_ENABLED) return;
+    // 設定ミスを “419で気づく” より “即気づく” ほうが安全
+    const msg = `[axios] ${fnName}() was called but COOKIE_AUTH_ENABLED is false. Set VITE_COOKIE_AUTH=true for browser cookie auth.`;
+    // throw は呼び出し元で catch できる（Login/Register で alert 等に落とせる）
+    throw new Error(msg);
+}
+
 async function ensureCsrfCookie() {
-    // cookie系APIを叩くときはCSRF必須（CookieモードON前提）
+    assertCookieModeEnabled("ensureCsrfCookie");
     await initCsrf();
 }
 
 export async function cookieLogin({ email, password }) {
+    assertCookieModeEnabled("cookieLogin");
     await ensureCsrfCookie();
 
     const res = await axios.post(
@@ -234,7 +243,27 @@ export async function cookieLogin({ email, password }) {
     return res.data;
 }
 
+export async function cookieRegister({ name, email, password }) {
+    assertCookieModeEnabled("cookieRegister");
+    await ensureCsrfCookie();
+
+    const res = await axios.post(
+        "/auth/cookie/register",
+        { name, email, password },
+        {
+            withCredentials: true,
+            headers: {
+                "X-Requested-With": "XMLHttpRequest",
+                Accept: "application/json",
+            },
+        }
+    );
+    return res.data;
+}
+
 export async function cookieMe() {
+    assertCookieModeEnabled("cookieMe");
+
     const res = await axios.get("/auth/cookie/me", {
         withCredentials: true,
         headers: {
@@ -246,6 +275,7 @@ export async function cookieMe() {
 }
 
 export async function cookieLogout() {
+    assertCookieModeEnabled("cookieLogout");
     await ensureCsrfCookie();
 
     const res = await axios.post("/auth/cookie/logout", null, {

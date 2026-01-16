@@ -12,6 +12,9 @@ use App\Http\Controllers\HabitLogController;
 // ★Push
 use App\Http\Controllers\Api\V1\PushSubscriptionController;
 
+// ★Reminders
+use App\Http\Controllers\Api\V1\ReminderController;
+
 /*
 |--------------------------------------------------------------------------
 | API Routes
@@ -48,13 +51,28 @@ Route::prefix('v1')->group(function () {
         Route::get('/auth/me',      [ApiAuthController::class, 'me']);
         Route::post('/auth/logout', [ApiAuthController::class, 'logout']);
 
-        // Today / Week（★触らない＝ダッシュボード安全）
+        // Today / Week（ダッシュボード）
         Route::get('/today', [TodayController::class, 'show']);
         Route::get('/week',  [WeekController::class, 'show']);
 
-        // Habits / Logs（★触らない）
+        // Habits
         Route::post('/habits', [HabitController::class, 'store']);
+        Route::get('/habits/{habit}', [HabitController::class, 'show']);
+        Route::put('/habits/{habit}', [HabitController::class, 'update']);
+
+        // Logs（toggle）
         Route::post('/habits/{habit}/toggle', [HabitLogController::class, 'toggle']);
+
+        /*
+        |----------------------------------------------------------------------
+        | Reminders (protected)
+        |----------------------------------------------------------------------
+        | - 子レコード方式（parent_task_id / root_task_id）前提
+        | - 通知クリックからの操作（snooze/done/cancel）
+        */
+        Route::post('/reminders/{task}/snooze', [ReminderController::class, 'snooze']);
+        Route::post('/reminders/{task}/done',   [ReminderController::class, 'done']);
+        Route::post('/reminders/{task}/cancel', [ReminderController::class, 'cancel']);
 
         /*
         |----------------------------------------------------------------------

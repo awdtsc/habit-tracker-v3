@@ -181,6 +181,11 @@ class ReminderController extends Controller
             return response()->json(['message' => 'already finished'], 409);
         }
 
+        // ★in-flight は触らない（dispatch と競合させない）
+        if ((string)$t->status === 'sending') {
+            return response()->json(['message' => 'task is sending'], 409);
+        }
+
         $nowJst = $this->nowJst();
         $dateYmd = $nowJst->toDateString();
         $timeSlot = (int)($ht->time_slot ?? 0);
@@ -241,6 +246,11 @@ class ReminderController extends Controller
         }
 
         $rootId = $t->root_task_id ? (int)$t->root_task_id : (int)$t->id;
+
+        // ★in-flight は触らない（dispatch と競合させない）
+        if ((string)$t->status === 'sending') {
+            return response()->json(['message' => 'task is sending'], 409);
+        }
 
         $nowJst = $this->nowJst();
         $dateYmd = $nowJst->toDateString();

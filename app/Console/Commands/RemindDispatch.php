@@ -22,14 +22,21 @@ class RemindDispatch extends Command
         $rescueMinutes = max(1, (int)$this->option('rescue-minutes'));
         $delayBeforeClaim = max(0, (int)$this->option('delay-before-claim'));
 
-        $result = $runner->run([
-            'limit' => $limit,
-            'debug' => $debug,
-            'rescue_minutes' => $rescueMinutes,
-            'delay_before_claim' => $delayBeforeClaim,
-        ], $this);
+        try {
+            $result = $runner->run([
+                'limit' => $limit,
+                'debug' => $debug,
+                'rescue_minutes' => $rescueMinutes,
+                'delay_before_claim' => $delayBeforeClaim,
+            ], $this);
 
-        $this->info("done sent={$result['sent']} skipped={$result['skipped']} error={$result['error']}");
-        return ($result['error'] === 0) ? self::SUCCESS : self::FAILURE;
+            $this->info("done sent={$result['sent']} skipped={$result['skipped']} error={$result['error']}");
+            return ($result['error'] === 0) ? self::SUCCESS : self::FAILURE;
+        } catch (\Throwable $e) {
+            // 入口で落ちない（運用最優先）
+            $msg = mb_strimwidth((string)$e->getMessage(), 0, 500, '…', 'UTF-8');
+            $this->error('remind:dispatch crashed: ' . $msg);
+            return self::FAILURE;
+        }
     }
 }

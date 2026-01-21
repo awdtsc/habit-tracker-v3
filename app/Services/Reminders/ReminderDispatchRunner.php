@@ -28,31 +28,27 @@ class ReminderDispatchRunner
         $rescueMinutes = (int)($opts['rescue_minutes'] ?? 15);
         $delay = (int)($opts['delay_before_claim'] ?? 0);
 
-        // 既存仕様を保ちつつ：retry / heartbeat
         $MAX_RETRIES = 2;
         $retryDelaysMin = [2, 5];
         $HEARTBEAT_EVERY_SEC = 20;
 
-        // ★仕様: 個別は最大2件、3件以上はdigestにまとめる
-        $DIGEST_THRESHOLD = 2; // count($notify) > 2 => digest（=3件以上）
+        $DIGEST_THRESHOLD = 2; // 3件以上でdigest
         $DIGEST_TOP_TITLES = 3;
 
         $tz = 'Asia/Tokyo';
-
-        // ★JSTで統一（DBがUTCでも、ここで統一しないと混在しやすい）
-        $nowJst = fn() => now($tz);
+        $nowJst = fn () => now($tz);
 
         $appUrl = (string) config('app.url');
         $today = $this->payloads->todayJstYmd(); // YYYY-MM-DD (JST)
 
-        // rescue（JST基準で統一）
+        // rescue
         $now = $nowJst();
         [$rescuedPending, $rescuedError] = $this->repo->rescueSending($now, $rescueMinutes, $MAX_RETRIES);
         if ($debug && ($rescuedPending > 0 || $rescuedError > 0) && $console) {
             $console->line("rescued_sending_pending={$rescuedPending} rescued_sending_error={$rescuedError}");
         }
 
-        // pick due（JST基準）
+        // pick due
         $now = $nowJst();
         $ids = $this->repo->pickDueIds($now, $limit);
         if (empty($ids)) {
@@ -65,7 +61,7 @@ class ReminderDispatchRunner
             sleep($delay);
         }
 
-        // claim（JST基準）
+        // claim
         $now = $nowJst();
         [$token, $claimed] = $this->repo->claim($ids, $now);
         if ($debug && $console) {
@@ -101,7 +97,7 @@ class ReminderDispatchRunner
         $lastHeartbeatTs = 0;
 
         foreach ($byUser as $uid => $list) {
-            // heartbeat（JST統一）
+            // heartbeat（repoのシグネチャに合わせる）
             $nowTs = time();
             if ($nowTs - $lastHeartbeatTs >= $HEARTBEAT_EVERY_SEC) {
                 $this->repo->heartbeat($token, $nowJst());
@@ -124,10 +120,10 @@ class ReminderDispatchRunner
             // notify候補（今日以外・alreadyDone を除外）
             $notify = [];
             foreach ($list as $t) {
-                // ★所有権を保ったままtouch（ここは軽い更新）
+                // repoのtouchは (id, token, now)
                 $this->repo->touch((int)$t->id, $token, $nowJst());
 
-                // ★仕様: 今日以外のタスクは捨てる（PC閉じて溜まった過去日など）
+                // 今日以外は捨てる
                 $taskDate = null;
                 try {
                     if (!empty($t->remind_at)) {
@@ -147,6 +143,7 @@ class ReminderDispatchRunner
                         'updated_at' => $nowJst(),
                     ]);
 
+                    // cancelPendingByRoot は (rootId, now)
                     $this->repo->cancelPendingByRoot($rootId, $nowJst());
 
                     $skipped++;
@@ -156,7 +153,7 @@ class ReminderDispatchRunner
                     continue;
                 }
 
-                // alreadyDone を除外（今日のみ）
+                // alreadyDone を除外
                 $htId = (int)($t->habit_time_id ?? 0);
                 if ($htId > 0 && isset($doneSet[$uid . ':' . $htId])) {
                     $rootId = $t->root_task_id ? (int)$t->root_task_id : (int)$t->id;
@@ -182,20 +179,17 @@ class ReminderDispatchRunner
 
             // digest（3件以上）
             if (count($notify) > $DIGEST_THRESHOLD) {
-                // ★まず「自分がまだ所有しているtaskだけ」に絞る（double-send/競合対策）
+                // 所有確認（失ってたら送らない）
                 $owned = [];
                 foreach ($notify as $t) {
                     if ($this->repo->touchOwned((int)$t->id, $token, $nowJst())) {
                         $owned[] = $t;
                     } else {
-                        // 他プロセスに奪われた/キャンセル済み等 → 送らない
                         $skipped++;
                         if ($debug && $console) $console->line("task {$t->id} skip: ownership lost before digest");
                     }
                 }
-                if (empty($owned)) {
-                    continue;
-                }
+                if (empty($owned)) continue;
 
                 $topTitles = [];
                 foreach (array_slice($owned, 0, $DIGEST_TOP_TITLES) as $t) {
@@ -210,10 +204,24 @@ class ReminderDispatchRunner
                     'top_titles' => $topTitles,
                 ]);
 
-                $res = $this->push->sendToUser((int)$uid, $payload);
+                // digest送信も例外で落とさない
+                try {
+                    $res = $this->push->sendToUser((int)$uid, $payload);
+                } catch (\Throwable $e) {
+                    $res = [
+                        'ok' => false,
+                        'queued' => 0,
+                        'sent' => 0,
+                        'failed' => count($owned),
+                        'skipped' => 0,
+                        'removed' => 0,
+                        'message' => 'digest_exception: ' . $this->payloads->safeErrorMessage($e),
+                    ];
+                }
 
                 if (!empty($res['ok'])) {
                     $taskIds = array_map(fn($t) => (int)$t->id, $owned);
+                    // markManySent は (taskIds, token, now, lastError?)
                     $this->repo->markManySent($taskIds, $token, $nowJst(), 'digest');
                     $sent += count($taskIds);
 
@@ -254,7 +262,7 @@ class ReminderDispatchRunner
 
             // individual（最大2件）
             foreach ($notify as $t) {
-                // ★送信直前：所有権を原子的に再確認（これがdouble-send対策の核）
+                // 送信直前の所有確認
                 if (!$this->repo->touchOwned((int)$t->id, $token, $nowJst())) {
                     $skipped++;
                     if ($debug && $console) $console->line("task {$t->id} skip: ownership lost before send");
@@ -328,7 +336,7 @@ class ReminderDispatchRunner
                         if ($debug && $console) $console->line("task {$t->id} failed (attempts={$attempts}): {$errStr}");
                     }
                 } catch (\Throwable $e) {
-                    $msg = mb_strimwidth((string)$e->getMessage(), 0, 1000, '…', 'UTF-8');
+                    $msg = $this->payloads->safeErrorMessage($e);
                     $this->repo->mark((int)$t->id, $token, [
                         'status' => 'error',
                         'last_error' => $msg,

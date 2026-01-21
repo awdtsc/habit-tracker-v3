@@ -61,7 +61,6 @@ class ReminderPayloadFactory
             'date' => $date,
             'root_task_id' => $ctx['root_task_id'] ?? null,
             'parent_task_id' => $ctx['parent_task_id'] ?? null,
-            // ★timezone統一
             'ts' => $this->nowJstIso(),
         ];
     }
@@ -92,26 +91,17 @@ class ReminderPayloadFactory
             'digest' => true,
             'count'  => $count,
             'date'   => $date,
-            // ★timezone統一
             'ts'     => $this->nowJstIso(),
         ];
     }
 
     /**
-     * 送信失敗レスポンスの安全な要約文字列を作る
-     *
-     * 目的:
-     * - DBに endpoint/keys 等の機微情報を残さない
-     * - 長大なペイロードでDBを肥大させない
-     *
-     * 方針:
-     * - ok/queued/sent/failed/removed/skipped 等の「数値サマリ」中心
-     * - failures はあっても件数だけ（詳細は落とす）
-     * - URL/endpoint/keys/tokenらしき長文字列は除去
+     * WebPushServiceの戻り値（配列想定）を “安全に要約” して last_error に入れるための文字列
+     * - endpoint/URL/長いtokenっぽい文字列を残さない
+     * - 文字数を厳格に制限する
      */
     public function errStr($res): string
     {
-        // 配列想定だが安全に
         $a = is_array($res) ? $res : ['raw_type' => gettype($res)];
 
         $summary = [
@@ -123,17 +113,14 @@ class ReminderPayloadFactory
             'removed' => (int)($a['removed'] ?? 0),
         ];
 
-        // message があれば短く入れる
         if (isset($a['message']) && is_string($a['message'])) {
             $summary['message'] = mb_strimwidth($a['message'], 0, 200, '…', 'UTF-8');
         }
 
-        // failures の詳細は落として件数だけ
         if (isset($a['failures']) && is_array($a['failures'])) {
             $summary['failures_count'] = count($a['failures']);
         }
 
-        // もし code/status などがあれば拾う（WebPushService側が返す場合）
         if (isset($a['code']) && (is_string($a['code']) || is_int($a['code']))) {
             $summary['code'] = $a['code'];
         }
@@ -142,11 +129,27 @@ class ReminderPayloadFactory
         }
 
         $json = json_encode($summary, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
-
-        // 念のため、URLっぽいものや長いトークンっぽい断片をマスク（保険）
-        $json = preg_replace('~https?://\S+~u', '[url]', (string)$json);
-        $json = preg_replace('~([A-Za-z0-9_\-]{40,})~u', '[redacted]', (string)$json);
+        $json = $this->maskSecretsLikeStrings((string)$json);
 
         return mb_strimwidth($json, 0, 500, '…', 'UTF-8');
+    }
+
+    /**
+     * 例外メッセージを last_error 用に安全化（URLや長いtokenをマスクし、長さ制限）
+     */
+    public function safeErrorMessage(\Throwable|string $e): string
+    {
+        $msg = is_string($e) ? $e : (string)$e->getMessage();
+        $msg = $this->maskSecretsLikeStrings($msg);
+        return mb_strimwidth($msg, 0, 500, '…', 'UTF-8');
+    }
+
+    private function maskSecretsLikeStrings(string $s): string
+    {
+        // URLっぽいものを除去
+        $s = preg_replace('~https?://\S+~u', '[url]', $s) ?? $s;
+        // 40文字以上のトークンっぽい文字列を除去
+        $s = preg_replace('~([A-Za-z0-9_\-]{40,})~u', '[redacted]', $s) ?? $s;
+        return $s;
     }
 }

@@ -4,29 +4,37 @@
 /*!40014 SET @OLD_FOREIGN_KEY_CHECKS=@@FOREIGN_KEY_CHECKS, FOREIGN_KEY_CHECKS=0 */;
 /*!40101 SET @OLD_SQL_MODE=@@SQL_MODE, SQL_MODE='NO_AUTO_VALUE_ON_ZERO' */;
 /*!40111 SET @OLD_SQL_NOTES=@@SQL_NOTES, SQL_NOTES=0 */;
+
 DROP TABLE IF EXISTS `cache`;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
 /*!40101 SET character_set_client = utf8 */;
+
 CREATE TABLE `cache` (
   `key` varchar(255) NOT NULL,
   `value` mediumtext NOT NULL,
   `expiration` int(11) NOT NULL,
   PRIMARY KEY (`key`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
 /*!40101 SET character_set_client = @saved_cs_client */;
+
 DROP TABLE IF EXISTS `cache_locks`;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
 /*!40101 SET character_set_client = utf8 */;
+
 CREATE TABLE `cache_locks` (
   `key` varchar(255) NOT NULL,
   `owner` varchar(255) NOT NULL,
   `expiration` int(11) NOT NULL,
   PRIMARY KEY (`key`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
 /*!40101 SET character_set_client = @saved_cs_client */;
+
 DROP TABLE IF EXISTS `failed_jobs`;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
 /*!40101 SET character_set_client = utf8 */;
+
 CREATE TABLE `failed_jobs` (
   `id` bigint(20) unsigned NOT NULL AUTO_INCREMENT,
   `uuid` varchar(255) NOT NULL,
@@ -38,10 +46,13 @@ CREATE TABLE `failed_jobs` (
   PRIMARY KEY (`id`),
   UNIQUE KEY `failed_jobs_uuid_unique` (`uuid`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
 /*!40101 SET character_set_client = @saved_cs_client */;
+
 DROP TABLE IF EXISTS `habit_logs`;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
 /*!40101 SET character_set_client = utf8 */;
+
 CREATE TABLE `habit_logs` (
   `id` bigint(20) unsigned NOT NULL AUTO_INCREMENT,
   `habit_id` bigint(20) unsigned NOT NULL,
@@ -64,10 +75,13 @@ CREATE TABLE `habit_logs` (
   CONSTRAINT `habit_logs_habit_time_id_foreign` FOREIGN KEY (`habit_time_id`) REFERENCES `habit_times` (`id`) ON DELETE CASCADE,
   CONSTRAINT `habit_logs_user_id_foreign` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
 /*!40101 SET character_set_client = @saved_cs_client */;
+
 DROP TABLE IF EXISTS `habit_times`;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
 /*!40101 SET character_set_client = utf8 */;
+
 CREATE TABLE `habit_times` (
   `id` bigint(20) unsigned NOT NULL AUTO_INCREMENT,
   `habit_id` bigint(20) unsigned NOT NULL,
@@ -80,10 +94,13 @@ CREATE TABLE `habit_times` (
   KEY `habit_times_habit_id_foreign` (`habit_id`),
   CONSTRAINT `habit_times_habit_id_foreign` FOREIGN KEY (`habit_id`) REFERENCES `habits` (`id`) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
 /*!40101 SET character_set_client = @saved_cs_client */;
+
 DROP TABLE IF EXISTS `habits`;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
 /*!40101 SET character_set_client = utf8 */;
+
 CREATE TABLE `habits` (
   `id` bigint(20) unsigned NOT NULL AUTO_INCREMENT,
   `user_id` bigint(20) unsigned NOT NULL,
@@ -105,10 +122,13 @@ CREATE TABLE `habits` (
   KEY `habits_user_id_foreign` (`user_id`),
   CONSTRAINT `habits_user_id_foreign` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
 /*!40101 SET character_set_client = @saved_cs_client */;
+
 DROP TABLE IF EXISTS `job_batches`;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
 /*!40101 SET character_set_client = utf8 */;
+
 CREATE TABLE `job_batches` (
   `id` varchar(255) NOT NULL,
   `name` varchar(255) NOT NULL,
@@ -122,10 +142,13 @@ CREATE TABLE `job_batches` (
   `finished_at` int(11) DEFAULT NULL,
   PRIMARY KEY (`id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
 /*!40101 SET character_set_client = @saved_cs_client */;
+
 DROP TABLE IF EXISTS `jobs`;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
 /*!40101 SET character_set_client = utf8 */;
+
 CREATE TABLE `jobs` (
   `id` bigint(20) unsigned NOT NULL AUTO_INCREMENT,
   `queue` varchar(255) NOT NULL,
@@ -137,30 +160,39 @@ CREATE TABLE `jobs` (
   PRIMARY KEY (`id`),
   KEY `jobs_queue_index` (`queue`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
 /*!40101 SET character_set_client = @saved_cs_client */;
+
 DROP TABLE IF EXISTS `migrations`;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
 /*!40101 SET character_set_client = utf8 */;
+
 CREATE TABLE `migrations` (
   `id` int(10) unsigned NOT NULL AUTO_INCREMENT,
   `migration` varchar(255) NOT NULL,
   `batch` int(11) NOT NULL,
   PRIMARY KEY (`id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
 /*!40101 SET character_set_client = @saved_cs_client */;
+
 DROP TABLE IF EXISTS `password_reset_tokens`;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
 /*!40101 SET character_set_client = utf8 */;
+
 CREATE TABLE `password_reset_tokens` (
   `email` varchar(255) NOT NULL,
   `token` varchar(255) NOT NULL,
   `created_at` timestamp NULL DEFAULT NULL,
   PRIMARY KEY (`email`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
 /*!40101 SET character_set_client = @saved_cs_client */;
+
 DROP TABLE IF EXISTS `personal_access_tokens`;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
 /*!40101 SET character_set_client = utf8 */;
+
 CREATE TABLE `personal_access_tokens` (
   `id` bigint(20) unsigned NOT NULL AUTO_INCREMENT,
   `tokenable_type` varchar(255) NOT NULL,
@@ -177,10 +209,13 @@ CREATE TABLE `personal_access_tokens` (
   KEY `personal_access_tokens_tokenable_type_tokenable_id_index` (`tokenable_type`,`tokenable_id`),
   KEY `personal_access_tokens_expires_at_index` (`expires_at`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
 /*!40101 SET character_set_client = @saved_cs_client */;
+
 DROP TABLE IF EXISTS `push_subscriptions`;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
 /*!40101 SET character_set_client = utf8 */;
+
 CREATE TABLE `push_subscriptions` (
   `id` bigint(20) unsigned NOT NULL AUTO_INCREMENT,
   `user_id` bigint(20) unsigned DEFAULT NULL,
@@ -206,32 +241,49 @@ CREATE TABLE `push_subscriptions` (
   KEY `push_subscriptions_last_used_at_index` (`last_used_at`),
   CONSTRAINT `push_subscriptions_user_id_foreign` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
 /*!40101 SET character_set_client = @saved_cs_client */;
+
 DROP TABLE IF EXISTS `remind_tasks`;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
 /*!40101 SET character_set_client = utf8 */;
+
 CREATE TABLE `remind_tasks` (
   `id` bigint(20) unsigned NOT NULL AUTO_INCREMENT,
-  `habit_log_id` bigint(20) unsigned NOT NULL,
+  `habit_log_id` bigint(20) unsigned DEFAULT NULL,
+  `habit_time_id` bigint(20) unsigned NOT NULL,
   `parent_task_id` bigint(20) unsigned DEFAULT NULL,
-  `remind_at` timestamp NOT NULL DEFAULT current_timestamp() ON UPDATE current_timestamp(),
+  `root_task_id` bigint(20) unsigned DEFAULT NULL,
+  `remind_at` datetime NOT NULL,
+  `sent_at` timestamp NULL DEFAULT NULL,
   `reschedule` longtext DEFAULT NULL CHECK (json_valid(`reschedule`)),
   `status` varchar(20) NOT NULL DEFAULT 'pending',
+  `attempts` tinyint(3) unsigned NOT NULL DEFAULT 0,
+  `claim_token` varchar(64) DEFAULT NULL,
+  `last_error` text DEFAULT NULL,
   `created_at` timestamp NULL DEFAULT NULL,
   `updated_at` timestamp NULL DEFAULT NULL,
   PRIMARY KEY (`id`),
-  UNIQUE KEY `remind_tasks_business_unique` (`habit_log_id`,`remind_at`),
-  UNIQUE KEY `uq_remind_log_at` (`habit_log_id`,`remind_at`),
+  UNIQUE KEY `uq_remind_tasks_habit_log_remind_at` (`habit_log_id`,`remind_at`),
   KEY `remind_tasks_status_remind_at_index` (`status`,`remind_at`),
   KEY `remind_tasks_habit_log_id_index` (`habit_log_id`),
+  KEY `remind_tasks_habit_time_id_index` (`habit_time_id`),
   KEY `remind_tasks_parent_task_id_index` (`parent_task_id`),
+  KEY `remind_tasks_root_task_id_index` (`root_task_id`),
+  KEY `remind_tasks_claim_token_index` (`claim_token`),
+  KEY `remind_tasks_updated_at_index` (`updated_at`),
   CONSTRAINT `remind_tasks_habit_log_id_foreign` FOREIGN KEY (`habit_log_id`) REFERENCES `habit_logs` (`id`) ON DELETE CASCADE,
-  CONSTRAINT `remind_tasks_parent_task_id_foreign` FOREIGN KEY (`parent_task_id`) REFERENCES `remind_tasks` (`id`) ON DELETE SET NULL
+  CONSTRAINT `remind_tasks_habit_time_id_foreign` FOREIGN KEY (`habit_time_id`) REFERENCES `habit_times` (`id`) ON DELETE CASCADE,
+  CONSTRAINT `remind_tasks_parent_task_id_foreign` FOREIGN KEY (`parent_task_id`) REFERENCES `remind_tasks` (`id`) ON DELETE SET NULL,
+  CONSTRAINT `remind_tasks_root_task_id_foreign` FOREIGN KEY (`root_task_id`) REFERENCES `remind_tasks` (`id`) ON DELETE SET NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
 /*!40101 SET character_set_client = @saved_cs_client */;
+
 DROP TABLE IF EXISTS `users`;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
 /*!40101 SET character_set_client = utf8 */;
+
 CREATE TABLE `users` (
   `id` bigint(20) unsigned NOT NULL AUTO_INCREMENT,
   `name` varchar(255) NOT NULL,
@@ -248,9 +300,10 @@ CREATE TABLE `users` (
   PRIMARY KEY (`id`),
   UNIQUE KEY `users_email_unique` (`email`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-/*!40101 SET character_set_client = @saved_cs_client */;
-/*!40103 SET TIME_ZONE=@OLD_TIME_ZONE */;
 
+/*!40101 SET character_set_client = @saved_cs_client */;
+
+/*!40103 SET TIME_ZONE=@OLD_TIME_ZONE */;
 /*!40101 SET SQL_MODE=@OLD_SQL_MODE */;
 /*!40014 SET FOREIGN_KEY_CHECKS=@OLD_FOREIGN_KEY_CHECKS */;
 /*!40014 SET UNIQUE_CHECKS=@OLD_UNIQUE_CHECKS */;

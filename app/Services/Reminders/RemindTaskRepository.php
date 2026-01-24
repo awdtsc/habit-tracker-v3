@@ -10,11 +10,9 @@ class RemindTaskRepository
 {
     public function rescueSending(\DateTimeInterface $now, int $rescueMinutes, int $maxRetries): array
     {
-        // ★now() は使わず、渡された $now を基準に計算（timezone混在を防ぐ）
         if ($now instanceof CarbonInterface) {
             $staleBefore = $now->copy()->subMinutes($rescueMinutes);
         } else {
-            // DateTimeInterface から Carbon に寄せて引き算（安全）
             $staleBefore = \Carbon\Carbon::instance(\DateTimeImmutable::createFromInterface($now))
                 ->subMinutes($rescueMinutes);
         }
@@ -43,7 +41,7 @@ class RemindTaskRepository
                 'updated_at' => $now,
             ]);
 
-        return [(int)$toPending, (int)$toError];
+        return [(int) $toPending, (int) $toError];
     }
 
     public function pickDueIds(\DateTimeInterface $now, int $limit): array
@@ -70,13 +68,9 @@ class RemindTaskRepository
                 'updated_at' => $now,
             ]);
 
-        return [$token, (int)$claimed];
+        return [$token, (int) $claimed];
     }
 
-    /**
-     * claim済み tasks を JOIN で一発取得（N+1回避）
-     * 返り値は StdClass の配列（->id などでアクセス）
-     */
     public function fetchClaimedTasks(string $token)
     {
         return DB::table('remind_tasks as rt')
@@ -113,19 +107,28 @@ class RemindTaskRepository
     }
 
     /**
-     * ★double-send対策の核
-     * 送信直前に「まだ status=sending かつ claim_token が自分」を原子的に確認しつつ touch する
-     * 1件更新できたときだけ true（＝所有権あり）
+     * ★重要: send直前の所有確認
+     * ただし MySQL は "値が変わらないUPDATE" を affected_rows=0 にすることがあるため、
+     * updateが0でも「所有権が本当に無い」と断定せず exists() で再確認する。
      */
     public function touchOwned(int $taskId, string $token, \DateTimeInterface $now): bool
     {
-        $n = DB::table('remind_tasks')
+        $affected = (int) DB::table('remind_tasks')
             ->where('id', $taskId)
             ->where('status', 'sending')
             ->where('claim_token', $token)
             ->update(['updated_at' => $now]);
 
-        return ((int)$n === 1);
+        if ($affected === 1) {
+            return true;
+        }
+
+        // 0件でも、updated_atが同値で "変更なし" と判定されただけの可能性がある。
+        return DB::table('remind_tasks')
+            ->where('id', $taskId)
+            ->where('status', 'sending')
+            ->where('claim_token', $token)
+            ->exists();
     }
 
     public function mark(int $taskId, string $token, array $updates): void
@@ -152,10 +155,9 @@ class RemindTaskRepository
 
     public function cancelPendingByRoot(int $rootId, \DateTimeInterface $now): int
     {
-        // ★in-flight を巻き込まない：pending のみ
         return (int) DB::table('remind_tasks')
             ->where('root_task_id', $rootId)
-            ->whereIn('status', ['pending'])
+            ->where('status', 'pending')
             ->update([
                 'status' => 'cancelled',
                 'claim_token' => null,
@@ -163,9 +165,6 @@ class RemindTaskRepository
             ]);
     }
 
-    /**
-     * 今日done集合を (user_id:habit_time_id) のキーで返す
-     */
     public function fetchDoneSet(string $todayYmd, array $userIds, array $habitTimeIds): array
     {
         if (empty($userIds) || empty($habitTimeIds)) return [];
@@ -180,8 +179,9 @@ class RemindTaskRepository
 
         $set = [];
         foreach ($rows as $r) {
-            $set[(int)$r->user_id . ':' . (int)$r->habit_time_id] = true;
+            $set[(int) $r->user_id . ':' . (int) $r->habit_time_id] = true;
         }
+
         return $set;
     }
 }

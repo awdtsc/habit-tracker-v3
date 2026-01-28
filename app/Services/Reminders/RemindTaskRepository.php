@@ -8,13 +8,18 @@ use Illuminate\Support\Str;
 
 class RemindTaskRepository
 {
-    public function rescueSending(\DateTimeInterface $now, int $rescueMinutes, int $maxRetries): array
+    public function rescueSending(\DateTimeInterface $now, int $rescueMinutes, int $maxRetries, int $retryDelayMinutes = 1): array
     {
+        $retryDelayMinutes = max(1, $retryDelayMinutes);
+
         if ($now instanceof CarbonInterface) {
             $staleBefore = $now->copy()->subMinutes($rescueMinutes);
+            $retryAt = $now->copy()->addMinutes($retryDelayMinutes);
         } else {
             $staleBefore = \Carbon\Carbon::instance(\DateTimeImmutable::createFromInterface($now))
                 ->subMinutes($rescueMinutes);
+            $retryAt = \Carbon\Carbon::instance(\DateTimeImmutable::createFromInterface($now))
+                ->addMinutes($retryDelayMinutes);
         }
 
         $toError = DB::table('remind_tasks')
@@ -36,7 +41,9 @@ class RemindTaskRepository
             ->where('attempts', '<', $maxRetries)
             ->update([
                 'status' => 'pending',
+                'remind_at' => $retryAt,
                 'attempts' => DB::raw('attempts + 1'),
+                'last_error' => 'rescued_sending_requeued',
                 'claim_token' => null,
                 'updated_at' => $now,
             ]);
@@ -50,6 +57,7 @@ class RemindTaskRepository
             ->where('status', 'pending')
             ->where('remind_at', '<=', $now)
             ->orderBy('remind_at')
+            ->orderBy('id') // ★安定化
             ->limit($limit)
             ->pluck('id')
             ->all();
@@ -62,6 +70,7 @@ class RemindTaskRepository
         $claimed = DB::table('remind_tasks')
             ->whereIn('id', $ids)
             ->where('status', 'pending')
+            ->whereNull('claim_token') // ★念のため
             ->update([
                 'status' => 'sending',
                 'claim_token' => $token,
@@ -87,6 +96,7 @@ class RemindTaskRepository
             ->where('rt.status', 'sending')
             ->where('rt.claim_token', $token)
             ->orderBy('rt.remind_at')
+            ->orderBy('rt.id')
             ->get();
     }
 
@@ -123,7 +133,6 @@ class RemindTaskRepository
             return true;
         }
 
-        // 0件でも、updated_atが同値で "変更なし" と判定されただけの可能性がある。
         return DB::table('remind_tasks')
             ->where('id', $taskId)
             ->where('status', 'sending')
@@ -153,11 +162,18 @@ class RemindTaskRepository
             ]);
     }
 
+    /**
+     * ★root掃除：root_task_id = rootId の pending だけでなく、
+     * root自身（id=rootId, root_task_id=NULL）が pending で残っても必ず消す。
+     */
     public function cancelPendingByRoot(int $rootId, \DateTimeInterface $now): int
     {
         return (int) DB::table('remind_tasks')
-            ->where('root_task_id', $rootId)
             ->where('status', 'pending')
+            ->where(function ($q) use ($rootId) {
+                $q->where('root_task_id', $rootId)
+                  ->orWhere('id', $rootId); // ★ここが本命
+            })
             ->update([
                 'status' => 'cancelled',
                 'claim_token' => null,

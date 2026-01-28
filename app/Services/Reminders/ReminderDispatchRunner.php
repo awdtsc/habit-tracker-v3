@@ -31,6 +31,7 @@ class ReminderDispatchRunner
         $MAX_RETRIES = 2;
         $retryDelaysMin = [2, 5];
         $HEARTBEAT_EVERY_SEC = 20;
+        $RESCUE_RETRY_DELAY_MIN = 1;
 
         $DIGEST_THRESHOLD = 2; // 3件以上でdigest
         $DIGEST_TOP_TITLES = 3;
@@ -39,11 +40,19 @@ class ReminderDispatchRunner
         $nowJst = fn () => now($tz);
 
         $appUrl = (string) config('app.url');
-        $today = $this->payloads->todayJstYmd(); // YYYY-MM-DD (JST)
+
+        // ★run開始時点の JST 日付で固定（深夜境界でブレない）
+        $runNow = $nowJst();
+        $today = $runNow->toDateString(); // YYYY-MM-DD (JST)
 
         // rescue
         $now = $nowJst();
-        [$rescuedPending, $rescuedError] = $this->repo->rescueSending($now, $rescueMinutes, $MAX_RETRIES);
+        [$rescuedPending, $rescuedError] = $this->repo->rescueSending(
+            $now,
+            $rescueMinutes,
+            $MAX_RETRIES,
+            $RESCUE_RETRY_DELAY_MIN
+        );
         if ($debug && ($rescuedPending > 0 || $rescuedError > 0) && $console) {
             $console->line("rescued_sending_pending={$rescuedPending} rescued_sending_error={$rescuedError}");
         }
@@ -126,8 +135,12 @@ class ReminderDispatchRunner
                 // 今日以外は捨てる
                 $taskDate = null;
                 try {
-                    if (!empty($t->remind_at)) {
-                        $taskDate = Carbon::parse($t->remind_at)->setTimezone($tz)->toDateString();
+                    $remindAt = $t->remind_at ?? null;
+
+                    if ($remindAt instanceof \Carbon\CarbonInterface) {
+                        $taskDate = $remindAt->copy()->setTimezone($tz)->toDateString();
+                    } elseif (!empty($remindAt)) {
+                        $taskDate = Carbon::parse($remindAt)->setTimezone($tz)->toDateString();
                     }
                 } catch (\Throwable $e) {
                     $taskDate = null;
@@ -221,9 +234,18 @@ class ReminderDispatchRunner
 
                 if (!empty($res['ok'])) {
                     $taskIds = array_map(fn($t) => (int)$t->id, $owned);
-                    // markManySent は (taskIds, token, now, lastError?)
                     $this->repo->markManySent($taskIds, $token, $nowJst(), 'digest');
                     $sent += count($taskIds);
+
+                    // ★成功時も root ごとに pending を掃除（二重送信保険）
+                    $rootIds = [];
+                    foreach ($owned as $t) {
+                        $rootIds[] = $t->root_task_id ? (int)$t->root_task_id : (int)$t->id;
+                    }
+                    $rootIds = array_values(array_unique($rootIds));
+                    foreach ($rootIds as $rid) {
+                        $this->repo->cancelPendingByRoot($rid, $nowJst());
+                    }
 
                     if ($debug && $console) $console->line("digest sent user={$uid} count=" . count($taskIds));
                     continue;
@@ -260,9 +282,8 @@ class ReminderDispatchRunner
                 continue;
             }
 
-            // individual（最大2件）
+            // individual
             foreach ($notify as $t) {
-                // 送信直前の所有確認
                 if (!$this->repo->touchOwned((int)$t->id, $token, $nowJst())) {
                     $skipped++;
                     if ($debug && $console) $console->line("task {$t->id} skip: ownership lost before send");
@@ -305,6 +326,11 @@ class ReminderDispatchRunner
                             'updated_at' => $nowJst(),
                         ]);
                         $sent++;
+
+                        // ★成功時も同rootのpending掃除（二重送信保険）
+                        $rootId = $t->root_task_id ? (int)$t->root_task_id : (int)$t->id;
+                        $this->repo->cancelPendingByRoot($rootId, $nowJst());
+
                         continue;
                     }
 

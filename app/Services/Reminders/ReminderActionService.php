@@ -23,9 +23,9 @@ class ReminderActionService
 
     /**
      * Snooze:
-     * - done/cancelled は不可
-     * - sending は触らない（dispatch と競合させない）
-     * - pending だけ cancelled にして、新しい pending task を作る
+     * - done/cancelled/skipped は不可（終端）
+     * - sending は不可（dispatch と競合させない）
+     * - sent/pending の task を cancelled にし、root配下の pending も止めて、新しい pending task を作る
      *
      * @return array<string,mixed>
      */
@@ -35,77 +35,124 @@ class ReminderActionService
             throw new \RuntimeException('minutes must be 1..1440', 422);
         }
 
-        $parent = $this->resolver->getTaskOrFail($taskId);
-
-        if (in_array((string)$parent->status, ['done', 'cancelled'], true)) {
-            throw new \RuntimeException('series already finished', 409);
-        }
-
-        if (empty($parent->habit_time_id)) {
-            throw new \RuntimeException('habit_time_id missing', 500);
-        }
-
-        $ht = $this->resolver->getHabitTimeOrFail((int)$parent->habit_time_id);
-        $habit = $this->resolver->getHabitOrFail((int)$ht->habit_id);
-        $this->resolver->assertOwnershipOrFail($habit, $userId);
-
-        $rootId = $parent->root_task_id ? (int)$parent->root_task_id : (int)$parent->id;
-
         $nowJst = $this->nowJst();
 
         // “次の分境界(tick)” 基準（everyMinute dispatch と相性が良い）
         $base = $nowJst->copy()->addMinute()->startOfMinute();
         $remindAt = $base->copy()->addMinutes(max(0, $minutes - 1));
 
-        $newId = DB::transaction(function () use ($parent, $rootId, $remindAt, $minutes, $nowJst) {
-            // root_task_id 未設定なら親に付与
-            if (!$parent->root_task_id) {
-                DB::table('remind_tasks')->where('id', (int)$parent->id)->update([
-                    'root_task_id' => $rootId,
-                    'updated_at' => $nowJst,
+        try {
+            $result = DB::transaction(function () use ($userId, $taskId, $minutes, $nowJst, $remindAt) {
+
+                // 1) 対象 task をロックして取り直す（codex E 対策）
+                $locked = DB::table('remind_tasks')->where('id', $taskId)->lockForUpdate()->first();
+                if (!$locked) {
+                    throw new \RuntimeException('task not found', 404);
+                }
+                if (empty($locked->habit_time_id)) {
+                    throw new \RuntimeException('habit_time_id missing', 500);
+                }
+
+                // 2) ownership をロック下でも確認（データ破損でも安全）
+                $ht = $this->resolver->getHabitTimeOrFail((int)$locked->habit_time_id);
+                $habit = $this->resolver->getHabitOrFail((int)$ht->habit_id);
+                $this->resolver->assertOwnershipOrFail($habit, $userId);
+
+                $st = (string)($locked->status ?? '');
+
+                // 3) 終端は操作不可（skipped も終端）
+                if (in_array($st, ['done', 'cancelled', 'skipped'], true)) {
+                    throw new \RuntimeException('series already finished', 409);
+                }
+
+                // 4) sending は操作不可（dispatch競合回避：codex D）
+                if ($st === 'sending') {
+                    throw new \RuntimeException('task is sending', 409);
+                }
+
+                // 5) 実運用は sent が主。pending も許可してOK（今の仕様踏襲）
+                $allowedFrom = ['sent', 'pending'];
+                if (!in_array($st, $allowedFrom, true)) {
+                    throw new \RuntimeException('task is not snoozeable', 409);
+                }
+
+                $rootId = $locked->root_task_id ? (int)$locked->root_task_id : (int)$locked->id;
+
+                // root_task_id 未設定なら親に付与（ロック下）
+                if (!$locked->root_task_id) {
+                    DB::table('remind_tasks')->where('id', (int)$locked->id)->update([
+                        'root_task_id' => $rootId,
+                        'updated_at' => $nowJst,
+                    ]);
+                }
+
+                // root配下の pending だけ止める（sending は触らない）
+                DB::table('remind_tasks')
+                    ->where('root_task_id', $rootId)
+                    ->where('status', 'pending')
+                    ->update([
+                        'status' => 'cancelled',
+                        'claim_token' => null,
+                        'updated_at' => $nowJst,
+                    ]);
+
+                // 6) 親 task を cancelled に確定（条件付きUPDATE：codex E 対策）
+                $affected = DB::table('remind_tasks')
+                    ->where('id', (int)$locked->id)
+                    ->whereIn('status', $allowedFrom) // sent/pending のときだけ
+                    ->update([
+                        'status' => 'cancelled',
+                        'claim_token' => null,
+                        'updated_at' => $nowJst,
+                    ]);
+
+                if ($affected !== 1) {
+                    throw new \RuntimeException('conflict', 409);
+                }
+
+                $reschedule = [[
+                    'type' => 'snooze',
+                    'minutes' => (int)$minutes,
+                    'at' => $nowJst->toIso8601String(),
+                ]];
+
+                $newId = DB::table('remind_tasks')->insertGetId([
+                    'habit_time_id'  => (int)$locked->habit_time_id,
+                    'habit_log_id'   => null,
+                    'parent_task_id' => (int)$locked->id,
+                    'root_task_id'   => $rootId,
+                    'remind_at'      => $remindAt,
+                    'sent_at'        => null,
+                    'reschedule'     => json_encode($reschedule, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
+                    'status'         => 'pending',
+                    'claim_token'    => null,
+                    'last_error'     => null,
+                    'created_at'     => $nowJst,
+                    'updated_at'     => $nowJst,
                 ]);
+
+                return [
+                    'new_id' => (int)$newId,
+                    'root_id' => (int)$rootId,
+                    'habit' => $habit,
+                    'ht' => $ht,
+                    'parent_id' => (int)$locked->id,
+                ];
+            });
+        } catch (\RuntimeException $e) {
+            $code = (int)$e->getCode();
+            if (in_array($code, [401, 403, 404, 409, 422], true)) {
+                throw $e;
             }
+            throw new \RuntimeException('internal error', 500);
+        } catch (\Throwable $e) {
+            throw new \RuntimeException('internal error', 500);
+        }
 
-            // pending だけ止める（sending は触らない）
-            DB::table('remind_tasks')
-                ->where('root_task_id', $rootId)
-                ->where('status', 'pending')
-                ->update([
-                    'status' => 'cancelled',
-                    'claim_token' => null,
-                    'updated_at' => $nowJst,
-                ]);
-
-            // 親が pending なら親自身も cancelled にしておく（sent/sending は残す）
-            if ((string)$parent->status === 'pending') {
-                DB::table('remind_tasks')->where('id', (int)$parent->id)->update([
-                    'status' => 'cancelled',
-                    'claim_token' => null,
-                    'updated_at' => $nowJst,
-                ]);
-            }
-
-            $reschedule = [[
-                'type' => 'snooze',
-                'minutes' => (int)$minutes,
-                'at' => $nowJst->toIso8601String(),
-            ]];
-
-            return DB::table('remind_tasks')->insertGetId([
-                'habit_time_id'  => (int)$parent->habit_time_id,
-                'habit_log_id'   => null,
-                'parent_task_id' => (int)$parent->id,
-                'root_task_id'   => $rootId,
-                'remind_at'      => $remindAt,
-                'sent_at'        => null,
-                'reschedule'     => json_encode($reschedule, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
-                'status'         => 'pending',
-                'claim_token'    => null,
-                'last_error'     => null,
-                'created_at'     => $nowJst,
-                'updated_at'     => $nowJst,
-            ]);
-        });
+        /** @var object $habit */
+        $habit = $result['habit'];
+        /** @var object $ht */
+        $ht = $result['ht'];
 
         $dateYmd = $nowJst->toDateString();
         $timeSlot = (int)($ht->time_slot ?? 0);
@@ -115,13 +162,13 @@ class ReminderActionService
             'ok' => true,
             'self_status' => 'snooze',
 
-            'task_id' => (int)$parent->id,
-            'new_task_id' => (int)$newId,
-            'root_task_id' => (int)$rootId,
-            'parent_task_id' => (int)$parent->id,
+            'task_id' => (int)$result['parent_id'],
+            'new_task_id' => (int)$result['new_id'],
+            'root_task_id' => (int)$result['root_id'],
+            'parent_task_id' => (int)$result['parent_id'],
 
             'habit_id' => (int)$habit->id,
-            'habit_time_id' => (int)$parent->habit_time_id,
+            'habit_time_id' => (int)$ht->id,
             'habit_log_id' => null,
 
             'date' => $dateYmd,
@@ -134,7 +181,7 @@ class ReminderActionService
 
     /**
      * 単体キャンセル：この task 1件だけ cancelled にする（root配下は触らない）
-     * - done/cancelled は 409
+     * - done/cancelled/skipped は 409
      * - sending は 409（dispatchと競合させない）
      * - レース対策：lockForUpdate + 条件付きUPDATE
      *
@@ -163,14 +210,14 @@ class ReminderActionService
                     throw new \RuntimeException('habit_time_id missing', 500);
                 }
 
-                // ownership をロック下でも確認（habit_time_id が変なデータでも安全）
+                // ownership をロック下でも確認
                 $ht = DB::table('habit_times')->where('id', (int)$locked->habit_time_id)->first();
                 if (!$ht) throw new \RuntimeException('habit_time not found', 404);
                 $habit = DB::table('habits')->where('id', (int)$ht->habit_id)->first();
                 if (!$habit || (int)$habit->user_id !== (int)$userId) throw new \RuntimeException('forbidden', 403);
 
                 $st = (string)($locked->status ?? '');
-                if (in_array($st, ['done', 'cancelled'], true)) {
+                if (in_array($st, ['done', 'cancelled', 'skipped'], true)) {
                     throw new \RuntimeException('already finished', 409);
                 }
                 if ($st === 'sending') {
@@ -179,7 +226,7 @@ class ReminderActionService
 
                 $affected = DB::table('remind_tasks')
                     ->where('id', (int)$locked->id)
-                    ->whereNotIn('status', ['done', 'cancelled', 'sending'])
+                    ->whereNotIn('status', ['done', 'cancelled', 'skipped', 'sending'])
                     ->update([
                         'status' => 'cancelled',
                         'claim_token' => null,
@@ -221,7 +268,7 @@ class ReminderActionService
      * done（シリーズ終了）：
      * - この task を done
      * - root配下の pending を止める（sending は触らない）
-     * - cancelled/done は 409
+     * - cancelled/done/skipped は 409
      * - sending は 409
      * - レース対策：lockForUpdate + 条件付きUPDATE
      *
@@ -256,7 +303,7 @@ class ReminderActionService
                 if (!$habitRow || (int)$habitRow->user_id !== (int)$userId) throw new \RuntimeException('forbidden', 403);
 
                 $st = (string)($locked->status ?? '');
-                if (in_array($st, ['done', 'cancelled'], true)) {
+                if (in_array($st, ['done', 'cancelled', 'skipped'], true)) {
                     throw new \RuntimeException('already finished', 409);
                 }
                 if ($st === 'sending') {
@@ -296,14 +343,14 @@ class ReminderActionService
 
                 $affected = DB::table('remind_tasks')
                     ->where('id', (int)$locked->id)
-                    ->whereNotIn('status', ['done', 'cancelled', 'sending'])
+                    ->whereNotIn('status', ['done', 'cancelled', 'skipped', 'sending'])
                     ->update($update);
 
                 if ($affected !== 1) {
                     throw new \RuntimeException('conflict', 409);
                 }
 
-                // シリーズ終了：pending だけ止める
+                // シリーズ終了：pending だけ止める（sending は触らない）
                 DB::table('remind_tasks')
                     ->where('root_task_id', $rootId)
                     ->where('status', 'pending')

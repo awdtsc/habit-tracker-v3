@@ -14,9 +14,14 @@ return new class extends Migration {
 
         Schema::create('remind_tasks', function (Blueprint $table) {
             $table->id();
-            $table->timestamp('remind_at')->index();
+
+            // Use DATETIME to avoid implicit CURRENT_TIMESTAMP / ON UPDATE semantics in MySQL/MariaDB.
+            $table->dateTime('remind_at')->index();
             $table->string('status', 32)->default('pending')->index();
-            $table->timestamp('sent_at')->nullable();
+
+            // Also DATETIME for consistency with remind_at.
+            $table->dateTime('sent_at')->nullable();
+
             $table->timestamps();
         });
     }

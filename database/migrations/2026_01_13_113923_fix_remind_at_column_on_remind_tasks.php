@@ -11,26 +11,20 @@ return new class extends Migration {
             return;
         }
 
-        // NULL が残っていると NOT NULL 化で落ちるので、最低限の救済を入れる。
-        // ここでは migrate を止めないことを優先し、NULL は CURRENT_TIMESTAMP で埋める。
-        DB::statement("
-            UPDATE remind_tasks
-            SET remind_at = CURRENT_TIMESTAMP
-            WHERE remind_at IS NULL
-        ");
+        // If NULLs exist, keep remind_at nullable to avoid mutating historical meaning.
+        // If no NULLs, enforce NOT NULL for stronger invariants.
+        $nullCount = DB::table('remind_tasks')->whereNull('remind_at')->count();
 
-        // MariaDB/MySQL: ON UPDATE を外すには MODIFY が確実（Schema::change は環境依存）
-        // “通知予定時刻”なので default/current_timestamp は付けない（手動で値を入れる前提）
-        DB::statement("
-            ALTER TABLE remind_tasks
-            MODIFY COLUMN remind_at TIMESTAMP NOT NULL
-        ");
+        if ($nullCount === 0) {
+            DB::statement("ALTER TABLE remind_tasks MODIFY COLUMN remind_at DATETIME NOT NULL");
+        } else {
+            DB::statement("ALTER TABLE remind_tasks MODIFY COLUMN remind_at DATETIME NULL");
+        }
     }
 
     public function down(): void
     {
-        // 運用事故防止：rollbackで ON UPDATE を復活させるのは危険。
-        // この migration の目的は安全化なので down は no-op とする。
+        // Safety-first: do not reintroduce dangerous defaults/ON UPDATE behavior on rollback.
         return;
     }
 };

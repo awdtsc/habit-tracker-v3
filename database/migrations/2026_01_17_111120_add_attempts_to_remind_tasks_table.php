@@ -8,9 +8,12 @@ return new class extends Migration
 {
     public function up(): void
     {
+        if (!Schema::hasTable('remind_tasks')) {
+            return;
+        }
+
         Schema::table('remind_tasks', function (Blueprint $table) {
             // 送信失敗→再試行回数（0=未失敗）
-            // unsignedTinyInteger: 0..255（十分）
             if (!Schema::hasColumn('remind_tasks', 'attempts')) {
                 $table->unsignedTinyInteger('attempts')->default(0)->after('status');
             }
@@ -19,10 +22,7 @@ return new class extends Migration
 
     public function down(): void
     {
-        Schema::table('remind_tasks', function (Blueprint $table) {
-            if (Schema::hasColumn('remind_tasks', 'attempts')) {
-                $table->dropColumn('attempts');
-            }
-        });
+        // 運用事故防止：rollbackでの破壊的操作は行わない
+        return;
     }
 };

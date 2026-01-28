@@ -172,7 +172,7 @@ class RemindTaskRepository
             ->where('status', 'pending')
             ->where(function ($q) use ($rootId) {
                 $q->where('root_task_id', $rootId)
-                  ->orWhere('id', $rootId); // ★ここが本命
+                  ->orWhere('id', $rootId); // ★root自身も対象
             })
             ->update([
                 'status' => 'cancelled',

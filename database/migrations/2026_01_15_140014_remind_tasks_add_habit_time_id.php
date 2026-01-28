@@ -49,8 +49,21 @@ return new class extends Migration
 
         // 3) habit_log_id を NULL許可に（運用上：新規taskはhabit_log_id NULLを許容）
         if (Schema::hasColumn('remind_tasks', 'habit_log_id')) {
-            // FKがある場合は環境により失敗する可能性がある
-            DB::statement("ALTER TABLE remind_tasks MODIFY habit_log_id BIGINT(20) UNSIGNED NULL");
+            $driver = DB::getDriverName();
+            if ($driver === 'mysql') {
+                $fk = DB::select("
+                    SELECT CONSTRAINT_NAME
+                    FROM information_schema.KEY_COLUMN_USAGE
+                    WHERE TABLE_SCHEMA = DATABASE()
+                      AND TABLE_NAME = 'remind_tasks'
+                      AND COLUMN_NAME = 'habit_log_id'
+                      AND REFERENCED_TABLE_NAME IS NOT NULL
+                    LIMIT 1
+                ");
+                if (empty($fk)) {
+                    DB::statement("ALTER TABLE remind_tasks MODIFY habit_log_id BIGINT(20) UNSIGNED NULL");
+                }
+            }
         }
 
         // 4) 旧ユニーク（habit_log_id, remind_at）を落とす（存在する場合のみ）

@@ -35,6 +35,11 @@ return new class extends Migration
             }
         });
 
+        // Normalize sent_at to DATETIME NULL to avoid implicit CURRENT_TIMESTAMP / ON UPDATE behavior.
+        if (Schema::hasColumn('remind_tasks', 'sent_at')) {
+            DB::statement("ALTER TABLE remind_tasks MODIFY COLUMN sent_at DATETIME NULL");
+        }
+
         // Add indexes safely (check column existence and existing index names)
         $indexes = DB::select("SHOW INDEX FROM remind_tasks");
         $indexNames = array_unique(array_map(static fn ($idx) => $idx->Key_name, $indexes));

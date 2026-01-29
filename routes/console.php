@@ -15,6 +15,7 @@ Artisan::command('inspire', function () {
 // ------------------------------------------------------------
 Schedule::command('sanctum:prune-expired --hours=24')
     ->daily()
+    ->timezone('Asia/Tokyo')
     ->name('sanctum:prune-expired');
 
 // ------------------------------------------------------------
@@ -30,5 +31,23 @@ Schedule::command('sanctum:prune-expired --hours=24')
 // ------------------------------------------------------------
 Schedule::command('remind:dispatch --limit=50')
     ->everyMinute()
+    ->timezone('Asia/Tokyo')
     ->withoutOverlapping()
     ->name('remind:dispatch');
+
+// ------------------------------------------------------------
+// M4: Plan upcoming reminders (create pending remind_tasks)
+// - Run daily in JST
+// - Also run periodically as a safety net
+// ------------------------------------------------------------
+Schedule::command('remind:plan --days=2')
+    ->dailyAt('00:05')
+    ->timezone('Asia/Tokyo')
+    ->withoutOverlapping()
+    ->name('remind:plan:daily');
+
+Schedule::command('remind:plan --days=2')
+    ->everyThreeHours()
+    ->timezone('Asia/Tokyo')
+    ->withoutOverlapping()
+    ->name('remind:plan:net');

@@ -1,113 +1,146 @@
-<script setup>
-import GuestLayout from '@/Layouts/GuestLayout.vue';
-import InputError from '@/Components/InputError.vue';
-import InputLabel from '@/Components/InputLabel.vue';
-import PrimaryButton from '@/Components/PrimaryButton.vue';
-import TextInput from '@/Components/TextInput.vue';
-import { Head, Link, useForm } from '@inertiajs/vue3';
-
-const form = useForm({
-    name: '',
-    email: '',
-    password: '',
-    password_confirmation: '',
-});
-
-const submit = () => {
-    form.post(route('register'), {
-        onFinish: () => form.reset('password', 'password_confirmation'),
-    });
-};
-</script>
-
+<!-- resources/js/Pages/Auth/Register.vue -->
 <template>
-    <GuestLayout>
-        <Head title="Register" />
+  <div class="min-h-screen bg-[#f7f7f7] flex flex-col items-center justify-center px-4">
+    <h1 class="text-3xl font-bold text-[#2b6cb0] mb-10">
+      ハビットトラッカー
+    </h1>
 
-        <form @submit.prevent="submit">
-            <div>
-                <InputLabel for="name" value="Name" />
+    <div class="w-full max-w-md bg-[#e8ecf1] rounded-2xl shadow-md p-10 flex flex-col items-center">
+      <h2 class="text-xl font-bold text-gray-700 mb-8">ユーザー登録</h2>
 
-                <TextInput
-                    id="name"
-                    type="text"
-                    class="mt-1 block w-full"
-                    v-model="form.name"
-                    required
-                    autofocus
-                    autocomplete="name"
-                />
+      <!-- 名前 -->
+      <div class="w-full mb-6">
+        <label for="register-name" class="block text-sm text-gray-700 mb-1">名前</label>
+        <input
+          id="register-name"
+          name="name"
+          v-model.trim="name"
+          type="text"
+          autocomplete="name"
+          class="w-full px-4 py-3 bg-[#e6efff] rounded-xl outline-none focus:ring-2 focus:ring-blue-300 text-gray-700"
+          @keydown.enter="submit"
+        />
+      </div>
 
-                <InputError class="mt-2" :message="form.errors.name" />
-            </div>
+      <!-- メール -->
+      <div class="w-full mb-6">
+        <label for="register-email" class="block text-sm text-gray-700 mb-1">メールアドレス</label>
+        <input
+          id="register-email"
+          name="email"
+          v-model.trim="email"
+          type="email"
+          autocomplete="email"
+          inputmode="email"
+          class="w-full px-4 py-3 bg-[#e6efff] rounded-xl outline-none focus:ring-2 focus:ring-blue-300 text-gray-700"
+          @keydown.enter="submit"
+        />
+      </div>
 
-            <div class="mt-4">
-                <InputLabel for="email" value="Email" />
+      <!-- パスワード -->
+      <div class="w-full mb-8">
+        <label for="register-password" class="block text-sm text-gray-700 mb-1">パスワード</label>
+        <input
+          id="register-password"
+          name="password"
+          v-model.trim="password"
+          type="password"
+          autocomplete="new-password"
+          class="w-full px-4 py-3 bg-[#e6efff] rounded-xl outline-none focus:ring-2 focus:ring-blue-300 text-gray-700"
+          @keydown.enter="submit"
+        />
+      </div>
 
-                <TextInput
-                    id="email"
-                    type="email"
-                    class="mt-1 block w-full"
-                    v-model="form.email"
-                    required
-                    autocomplete="username"
-                />
+      <!-- 登ボタン -->
+      <button
+        @click="submit"
+        :disabled="busy"
+        class="w-full py-3 bg-[#2b6cb0] text-white font-bold rounded-full hover:bg-[#1e4e8c] transition mb-6 disabled:opacity-50"
+      >
+        登録する
+      </button>
 
-                <InputError class="mt-2" :message="form.errors.email" />
-            </div>
+      <button @click="goLogin" class="text-sm text-[#2b6cb0] hover:underline">
+        ログインに戻る
+      </button>
 
-            <div class="mt-4">
-                <InputLabel for="password" value="Password" />
-
-                <TextInput
-                    id="password"
-                    type="password"
-                    class="mt-1 block w-full"
-                    v-model="form.password"
-                    required
-                    autocomplete="new-password"
-                />
-
-                <InputError class="mt-2" :message="form.errors.password" />
-            </div>
-
-            <div class="mt-4">
-                <InputLabel
-                    for="password_confirmation"
-                    value="Confirm Password"
-                />
-
-                <TextInput
-                    id="password_confirmation"
-                    type="password"
-                    class="mt-1 block w-full"
-                    v-model="form.password_confirmation"
-                    required
-                    autocomplete="new-password"
-                />
-
-                <InputError
-                    class="mt-2"
-                    :message="form.errors.password_confirmation"
-                />
-            </div>
-
-            <div class="mt-4 flex items-center justify-end">
-                <Link
-                    :href="route('login')"
-                    class="rounded-md text-sm text-gray-600 underline hover:text-gray-900 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2"
-                >
-                    Already registered?
-                </Link>
-
-                <PrimaryButton
-                    class="ms-4"
-                    :class="{ 'opacity-25': form.processing }"
-                    :disabled="form.processing"
-                >
-                    Register
-                </PrimaryButton>
-            </div>
-        </form>
-    </GuestLayout>
+      <div v-if="debugMsg" class="mt-6 text-xs text-gray-600 w-full">
+        {{ debugMsg }}
+      </div>
+    </div>
+  </div>
 </template>
+
+<script setup>
+import { ref } from "vue";
+import { cookieRegister, cookieMe } from "@/axios";
+import { useRouter } from "vue-router";
+import { clearUserCache, getUser } from "@/state/authUserCache";
+import { safeRedirect } from "@/utils/safeRedirect";
+
+const name = ref("");
+const email = ref("");
+const password = ref("");
+
+const busy = ref(false);
+const debugMsg = ref("");
+
+const router = useRouter();
+
+async function submit() {
+  if (busy.value) return;
+
+  if (!name.value || !email.value || !password.value) {
+    alert("全ての項目を入力してください");
+    return;
+  }
+
+  busy.value = true;
+  debugMsg.value = "";
+
+  try {
+    console.log("[register] start (cookie-only)");
+
+    // 1) ユーザー作成 + Cookieログイン
+    await cookieRegister({
+      name: name.value,
+      email: email.value,
+      password: password.value,
+    });
+
+    const me = await cookieMe();
+    debugMsg.value = `Cookie register+login OK: ${me?.user?.email ?? "unknown"}`;
+
+    // 2) ガード安定化
+    clearUserCache();
+    const u = await getUser({ force: true });
+    if (!u) {
+      alert("登録直後の認証確認に失敗しました。もう一度ログインしてください。");
+      await router.replace({ name: "login", query: {} });
+      return;
+    }
+
+    const q = router.currentRoute.value.query.redirect;
+    const rawRedirect = typeof q === "string" ? q : "";
+    const redirect = safeRedirect(rawRedirect, "/today");
+
+    await router.replace(redirect);
+  } catch (e) {
+    console.error("[register error]", e);
+
+    const status = e?.response?.status ?? 0;
+
+    if (status === 422) {
+      alert("入力内容に誤りがあります（メール重複など）");
+    } else {
+      alert("登録に失敗しました");
+    }
+  } finally {
+    busy.value = false;
+  }
+}
+
+function goLogin() {
+  router.push("/login");
+}
+</script>

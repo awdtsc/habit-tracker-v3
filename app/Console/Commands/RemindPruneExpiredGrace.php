@@ -9,7 +9,7 @@ class RemindPruneExpiredGrace extends Command
 {
     protected $signature = 'remind:prune-expired-grace {--days=14} {--chunk=1000} {--dry-run=0}';
 
-    protected $description = 'Prune remind_tasks with status=skipped and last_error=expired_grace older than N days (JST), deleting by root group.';
+    protected $description = 'Prune remind_tasks with status=skipped and last_error=expired_grace older than N days (JST).';
 
     public function handle(): int
     {
@@ -35,7 +35,8 @@ class RemindPruneExpiredGrace extends Command
             ->where('last_error', 'expired_grace')
             ->where('updated_at', '<', $cutoff)
             ->orderBy('id')
-            ->chunkById($chunk, function ($rows) use (&$totalRoots, &$totalDeleted, $dryRun) {
+            ->chunkById($chunk, function ($rows) use (&$totalRoots, &$totalDeleted, $dryRun, $cutoff) {
+
                 $ids = [];
                 foreach ($rows as $r) {
                     $ids[] = (int) $r->id;
@@ -46,12 +47,16 @@ class RemindPruneExpiredGrace extends Command
 
                 $totalRoots += count($ids);
 
-                // rootグループごと消す（root自身は root_task_id=self 想定だが、念のため id/parent/root の3条件）
-                $q = DB::table('remind_tasks')->where(function ($w) use ($ids) {
-                    $w->whereIn('id', $ids)
-                      ->orWhereIn('root_task_id', $ids)
-                      ->orWhereIn('parent_task_id', $ids);
-                });
+                // ★重要：削除対象も expired_grace 条件を再適用する（過剰削除を防ぐ）
+                $q = DB::table('remind_tasks')
+                    ->where('status', 'skipped')
+                    ->where('last_error', 'expired_grace')
+                    ->where('updated_at', '<', $cutoff)
+                    ->where(function ($w) use ($ids) {
+                        $w->whereIn('id', $ids)
+                          ->orWhereIn('root_task_id', $ids)
+                          ->orWhereIn('parent_task_id', $ids);
+                    });
 
                 if ($dryRun) {
                     $would = (int) $q->count();

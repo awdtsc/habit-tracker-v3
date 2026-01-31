@@ -5,18 +5,17 @@ namespace App\Http\Controllers;
 
 use Illuminate\Http\Request;
 use App\Services\TodayService;
+use App\Services\TodayReminderScheduler;
 
 class TodayController extends Controller
 {
-    protected TodayService $service;
-
-    public function __construct(TodayService $service)
-    {
-        $this->service = $service;
-    }
+    public function __construct(
+        private readonly TodayService $service,
+        private readonly TodayReminderScheduler $reminderScheduler,
+    ) {}
 
     /**
-     * GET /api/today
+     * GET /api/v1/today
      *
      * TodayTab 用データ。
      * scope（morning / day / evening / night / all）に応じて
@@ -37,9 +36,28 @@ class TodayController extends Controller
 
         try {
             $payload = $this->service->buildTodayPayload(
-                $user->id,
-                $scope
+                (int)$user->id,
+                (string)$scope
             );
+
+            // ---------------------------------------------------------
+            // ★ Planなしでも「次回のpendingルート」を補完する（補助機能）
+            // - 失敗しても Today は落とさない
+            // ---------------------------------------------------------
+            $created = 0;
+            try {
+                $created = $this->reminderScheduler->ensureFromTodayPayload(
+                    (int)$user->id,
+                    is_array($payload) ? $payload : [],
+                    'Asia/Tokyo'
+                );
+            } catch (\Throwable $e) {
+                $created = 0;
+            }
+
+            if (is_array($payload)) {
+                $payload['_debug_reminders_created'] = (int)$created;
+            }
 
             return response()->json(
                 $payload,
@@ -47,16 +65,7 @@ class TodayController extends Controller
                 [],
                 JSON_UNESCAPED_UNICODE
             );
-
         } catch (\Throwable $e) {
-
-            // ログに残したい場合はここで
-            // logger()->error('[TodayController] load failed', [
-            //     'user_id' => $user->id,
-            //     'scope'   => $scope,
-            //     'error'   => $e->getMessage(),
-            // ]);
-
             return response()->json([
                 'error'   => 'today_load_failed',
                 'message' => 'Failed to load Today data.',

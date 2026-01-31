@@ -10,8 +10,10 @@ class HabitLogService
 {
     /**
      * ★ユニーク (user_id, habit_time_id, date) 前提で冪等に done 化する
-     * - 既に行があれば UPDATE して done にする（insertしない）
+     * - 既に行があれば UPDATE して done にする
      * - 無ければ INSERT
+     *
+     * self評価のときは rating=4 を必ず入れる（フロントの done 判定と一致させる）
      */
     public function ensureDoneLog(
         int $habitId,
@@ -31,38 +33,84 @@ class HabitLogService
             ->where('date', $dateYmd)
             ->first();
 
-        // checked_at はJSTの日時文字列
+        // checked_at は JST の日時文字列
         $checkedAt = $nowJst->copy()->setTimezone($tz)->toDateTimeString();
 
-        $patch = [];
-        if (Schema::hasColumn('habit_logs', 'habit_id')) $patch['habit_id'] = $habitId;
-        if (Schema::hasColumn('habit_logs', 'time_slot')) $patch['time_slot'] = $timeSlot;
-        if (Schema::hasColumn('habit_logs', 'status')) $patch['status'] = 'done';
-        if (Schema::hasColumn('habit_logs', 'checked_at')) $patch['checked_at'] = $checkedAt;
+        // ★self判定は堅牢に（大小文字や想定外表記に耐える）
+        $eval = strtolower(trim((string)$evaluationType));
+        $isSelf = ($eval === 'self');
 
-        if (Schema::hasColumn('habit_logs', 'rating')) {
-            $patch['rating'] = ($evaluationType === 'self') ? 4 : null;
-        }
-
-        if (Schema::hasColumn('habit_logs', 'updated_at')) $patch['updated_at'] = $nowJst;
+        $patch = $this->buildDonePatch(
+            habitId: $habitId,
+            habitTimeId: $habitTimeId,
+            userId: $userId,
+            dateYmd: $dateYmd,
+            timeSlot: $timeSlot,
+            checkedAt: $checkedAt,
+            nowJst: $nowJst,
+            isSelf: $isSelf,
+            includeCreatedAt: false
+        );
 
         if ($existing) {
             DB::table('habit_logs')->where('id', (int)$existing->id)->update($patch);
             return (int)$existing->id;
         }
 
-        $data = [];
-        if (Schema::hasColumn('habit_logs', 'habit_id')) $data['habit_id'] = $habitId;
-        if (Schema::hasColumn('habit_logs', 'habit_time_id')) $data['habit_time_id'] = $habitTimeId;
-        if (Schema::hasColumn('habit_logs', 'user_id')) $data['user_id'] = $userId;
-        if (Schema::hasColumn('habit_logs', 'date')) $data['date'] = $dateYmd;
-        if (Schema::hasColumn('habit_logs', 'time_slot')) $data['time_slot'] = $timeSlot;
-        if (Schema::hasColumn('habit_logs', 'status')) $data['status'] = 'done';
-        if (Schema::hasColumn('habit_logs', 'rating')) $data['rating'] = ($evaluationType === 'self') ? 4 : null;
-        if (Schema::hasColumn('habit_logs', 'checked_at')) $data['checked_at'] = $checkedAt;
-        if (Schema::hasColumn('habit_logs', 'created_at')) $data['created_at'] = $nowJst;
-        if (Schema::hasColumn('habit_logs', 'updated_at')) $data['updated_at'] = $nowJst;
+        $data = $this->buildDonePatch(
+            habitId: $habitId,
+            habitTimeId: $habitTimeId,
+            userId: $userId,
+            dateYmd: $dateYmd,
+            timeSlot: $timeSlot,
+            checkedAt: $checkedAt,
+            nowJst: $nowJst,
+            isSelf: $isSelf,
+            includeCreatedAt: true
+        );
 
-        return (int)DB::table('habit_logs')->insertGetId($data);
+        return (int) DB::table('habit_logs')->insertGetId($data);
+    }
+
+    /**
+     * done 化に必要な data/patch を組み立てる（insert/update 共通）
+     *
+     * @return array<string,mixed>
+     */
+    private function buildDonePatch(
+        int $habitId,
+        int $habitTimeId,
+        int $userId,
+        string $dateYmd,
+        int $timeSlot,
+        string $checkedAt,
+        Carbon $nowJst,
+        bool $isSelf,
+        bool $includeCreatedAt
+    ): array {
+        $out = [];
+
+        if (Schema::hasColumn('habit_logs', 'habit_id')) $out['habit_id'] = $habitId;
+        if (Schema::hasColumn('habit_logs', 'habit_time_id')) $out['habit_time_id'] = $habitTimeId;
+        if (Schema::hasColumn('habit_logs', 'user_id')) $out['user_id'] = $userId;
+        if (Schema::hasColumn('habit_logs', 'date')) $out['date'] = $dateYmd;
+
+        if (Schema::hasColumn('habit_logs', 'time_slot')) $out['time_slot'] = $timeSlot;
+        if (Schema::hasColumn('habit_logs', 'status')) $out['status'] = 'done';
+        if (Schema::hasColumn('habit_logs', 'checked_at')) $out['checked_at'] = $checkedAt;
+
+        // self のときは rating=4。そうでないときは null（フロントの判定と一致）
+        if (Schema::hasColumn('habit_logs', 'rating')) {
+            $out['rating'] = $isSelf ? 4 : null;
+        }
+
+        if ($includeCreatedAt && Schema::hasColumn('habit_logs', 'created_at')) {
+            $out['created_at'] = $nowJst;
+        }
+        if (Schema::hasColumn('habit_logs', 'updated_at')) {
+            $out['updated_at'] = $nowJst;
+        }
+
+        return $out;
     }
 }

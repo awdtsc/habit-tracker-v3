@@ -71,15 +71,18 @@
 </template>
 
 <script setup>
-import { ref, computed, watch, onBeforeUnmount } from "vue";
+import { ref, computed, watch, onMounted, onBeforeUnmount } from "vue";
 
 import TodaySlotView from "@/components/today/TodaySlotView.vue";
 import TodayAllView from "@/components/today/TodayAllView.vue";
 
-import { useTodayLoader } from "@/composables/useTodayLoader";
 import { useHabitLogStore } from "@/stores/habitLogStore";
-
 import { enumToSlotKey, isSlotKey } from "@/utils/slot";
+
+const props = defineProps({
+  // Pages/Today.vue から渡される：reminder-action → refreshKey++
+  refreshKey: { type: Number, default: 0 },
+});
 
 const TAB_STORAGE_KEY = "today-current-tab";
 
@@ -105,24 +108,90 @@ const resolvedTab = computed(() => {
 const isSlotTab = computed(() => isSlotKey(resolvedTab.value));
 
 /**
- * ★重要：
- * 「次の習慣（次スロット）」を表示するには、昼タブでも夕のデータが必要。
- * なので Today API は常に scope=all で取る。
+ * ★重要：Next表示のため、Today API は常に scope=all で取る
  */
 const apiScope = computed(() => "all");
 
-// loader（常に all を取得）
-const { today, nowSlot, nextSlot, habits, topPick, loading, errorMessage } =
-  useTodayLoader(apiScope);
+/* ==============================
+   Today API loader（refreshKey対応）
+   Route: GET api/v1/today
+================================ */
+const today = ref("");
+const nowSlot = ref(0);
+const nextSlot = ref(0);
+const habits = ref([]);
+const topPick = ref(null);
+
+const loading = ref(false);
+const errorMessage = ref("");
+
+let aborter = null;
+
+async function fetchTodayAll() {
+  if (aborter) aborter.abort();
+  aborter = new AbortController();
+
+  const url = `/api/v1/today?scope=${encodeURIComponent(apiScope.value)}`;
+
+  const res = await fetch(url, {
+    method: "GET",
+    credentials: "same-origin",
+    headers: { Accept: "application/json" },
+    signal: aborter.signal,
+  });
+
+  if (res.status === 401) {
+    throw new Error("未ログインです（401）。ログイン後に再読み込みしてください。");
+  }
+  if (!res.ok) {
+    const txt = await res.text().catch(() => "");
+    throw new Error(`HTTP ${res.status}\n${txt || "response body is empty"}`);
+  }
+
+  return await res.json();
+}
+
+async function reloadToday(reason = "unknown") {
+  errorMessage.value = "";
+  loading.value = true;
+
+  try {
+    const data = await fetchTodayAll();
+
+    today.value = String(data?.today ?? "");
+    nowSlot.value = Number(data?.now_slot ?? 0);
+    nextSlot.value = Number(data?.next_slot ?? 0);
+
+    habits.value = Array.isArray(data?.habits) ? data.habits : [];
+    topPick.value = data?.top_pick ?? null;
+  } catch (e) {
+    if (e?.name === "AbortError") return;
+    errorMessage.value = String(e?.message ?? e);
+  } finally {
+    loading.value = false;
+  }
+}
+
+onMounted(() => {
+  reloadToday("mount");
+});
+
+// ★モーダル操作 → Pages/Today.vue が refreshKey++ → ここで再取得
+watch(
+  () => props.refreshKey,
+  (next, prev) => {
+    if (next === prev) return;
+    reloadToday("refreshKey");
+  }
+);
 
 /**
  * ★仕様：Nextは「nowSlotのタブを見ているときだけ」出す
- * - activeTabがautoの場合も、resolvedTabがnowSlotに解決されているのでOK
  */
 const showNext = computed(() => {
   const nowKey = enumToSlotKey(nowSlot.value);
   if (!nowKey) return false;
-  return resolvedTab.value === nowKey; // morning/day/evening/night の一致時のみ
+  return resolvedTab.value === nowKey;
 });
 
 /* ==============================
@@ -196,16 +265,16 @@ const owner = logStore.createOwner();
 watch(
   [today, habits],
   ([d, hs]) => {
-    // ★ここで必ず掃除してから付け直すので、古いhabitObj参照が積み上がらない
+    // 古い参照が積み上がらないよう必ず掃除→付け直し
     logStore.detachOwner(owner);
     if (d && hs?.length) logStore.attachHabits(owner, d, hs);
   },
   { immediate: true }
 );
 
-// ★画面離脱時に確実に掃除
 onBeforeUnmount(() => {
   logStore.detachOwner(owner);
+  if (aborter) aborter.abort();
 });
 
 /* ==============================

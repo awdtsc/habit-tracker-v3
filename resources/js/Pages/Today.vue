@@ -6,13 +6,14 @@
       <div v-if="!ready" class="p-4 md:p-6 text-sm text-gray-500">
         読み込み中…
       </div>
-      <TodayTab v-else />
+
+      <TodayTab v-else :refresh-key="refreshKey" />
     </main>
   </div>
 </template>
 
 <script setup>
-import { onMounted, ref } from "vue";
+import { onMounted, onUnmounted, ref } from "vue";
 import AppHeader from "@/components/layout/AppHeader.vue";
 import TodayTab from "@/components/tabs/TodayTab.vue";
 import { prefetchCurrentWeek } from "@/state/weekCache";
@@ -20,12 +21,30 @@ import { prefetchCurrentWeek } from "@/state/weekCache";
 defineOptions({ name: "TodayPage" });
 
 const ready = ref(false);
+const refreshKey = ref(0);
+
+function bumpRefresh() {
+  refreshKey.value++;
+}
+
+const handler = (e) => {
+  const d = e?.detail;
+  if (!d) return;
+  bumpRefresh();
+};
 
 onMounted(() => {
-  // 先に1回ペイントさせる（＝URL切替直後の白画面体感を減らす）
+  // ★rAFが止まっても必ず表示されるように fallback を入れる
+  let painted = false;
+
   requestAnimationFrame(() => {
+    painted = true;
     ready.value = true;
   });
+
+  setTimeout(() => {
+    if (!painted) ready.value = true;
+  }, 80);
 
   // prefetchは“描画の後”へ（競合させない）
   requestAnimationFrame(() => {
@@ -35,5 +54,11 @@ onMounted(() => {
       setTimeout(() => prefetchCurrentWeek().catch(() => {}), 350);
     }
   });
+
+  window.addEventListener("reminder-action", handler);
+});
+
+onUnmounted(() => {
+  window.removeEventListener("reminder-action", handler);
 });
 </script>

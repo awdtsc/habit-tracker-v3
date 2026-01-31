@@ -69,6 +69,14 @@ const routes = [
         meta: { requiresAuth: true },
     },
 
+    // ★通知購読ページ（Vueで完結）
+    {
+        path: "/settings/notifications",
+        name: "settings.notifications",
+        component: () => import("../Pages/Settings/Notifications.vue"),
+        meta: { requiresAuth: true },
+    },
+
     {
         path: "/logout",
         name: "logout",

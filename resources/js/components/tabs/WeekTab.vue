@@ -47,6 +47,14 @@ import WeekHeader from "@/components/week/WeekHeader.vue";
 import WeekGrid from "@/components/week/WeekGrid.vue";
 import WeekProgressCard from "@/components/week/WeekProgressCard.vue";
 
+/**
+ * Weekly.vue から渡される
+ * reminder-action → refreshKey++ → ここで同じ週でも強制再fetch
+ */
+const props = defineProps({
+  refreshKey: { type: Number, default: 0 },
+});
+
 const route = useRoute();
 const router = useRouter();
 
@@ -100,6 +108,22 @@ async function loadWeek(weekStart) {
   } finally {
     inflight.value = false;
   }
+}
+
+/**
+ * ★refresh用：同じ週でも必ず再fetchしたい
+ * loadWeekは同一weekを弾くので、lastRequestedWeekを一旦外してから呼ぶ
+ */
+async function forceReloadCurrentWeek(reason = "refreshKey") {
+  if (!isActive.value) return;
+
+  const target = week.value?.week_start ?? resolveWeekTarget(route.query.week);
+  if (!target) return;
+
+  // 同一weekスキップを無効化
+  lastRequestedWeek.value = null;
+
+  await loadWeek(target);
 }
 
 async function syncQuery(weekStart) {
@@ -348,6 +372,17 @@ watch(
     }
 
     await loadWeek(next);
+  }
+);
+
+/* ------------------------------
+  ★refreshKey（モーダル操作同期）
+------------------------------ */
+watch(
+  () => props.refreshKey,
+  async (next, prev) => {
+    if (next === prev) return;
+    await forceReloadCurrentWeek("refreshKey");
   }
 );
 </script>

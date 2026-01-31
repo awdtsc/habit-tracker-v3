@@ -73,8 +73,10 @@ class ReminderDispatchRunner
         // claim
         $now = $nowJst();
         [$token, $claimed] = $this->repo->claim($ids, $now);
+
+        // ★SECURITY: claim_token をログに出さない（所有権トークン漏洩防止）
         if ($debug && $console) {
-            $console->line("picked=" . count($ids) . " claimed=" . $claimed . " token=" . $token);
+            $console->line("picked=" . count($ids) . " claimed=" . $claimed);
         }
 
         $tasks = $this->repo->fetchClaimedTasks($token);

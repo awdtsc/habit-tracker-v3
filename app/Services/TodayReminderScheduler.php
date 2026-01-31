@@ -5,6 +5,7 @@ namespace App\Services;
 
 use Carbon\Carbon;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 
 class TodayReminderScheduler
 {
@@ -54,12 +55,21 @@ class TodayReminderScheduler
 
         $now = Carbon::now($tz);
         $todayStart = $now->copy()->startOfDay();
-        $created = 0;
 
-        DB::transaction(function () use ($rows, $now, $todayStart, &$created) {
+        $created = 0;
+        $updated = 0;
+        $deduped = 0;
+
+        DB::transaction(function () use ($rows, $now, $todayStart, $tz, &$created, &$updated, &$deduped) {
+
             foreach ($rows as $r) {
-                // archived はスケジューリング対象外（必要ならここを外す）
+                // archived はスケジューリング対象外
                 if ((bool)($r->archived ?? false) === true) {
+                    continue;
+                }
+
+                $habitTimeId = (int)($r->habit_time_id ?? 0);
+                if ($habitTimeId <= 0) {
                     continue;
                 }
 
@@ -69,39 +79,93 @@ class TodayReminderScheduler
                 }
 
                 $offsetMin = (int)($r->remind_offset ?? 0);
-                $habitTimeId = (int)$r->habit_time_id;
 
-                // 今日の notify_time をベースに remind_at 作成
-                // notify_time は "HH:MM:SS" の想定
+                // ★同一 habit_time の並行実行を直列化（E対策の本体）
+                DB::table('habit_times')
+                    ->where('id', $habitTimeId)
+                    ->lockForUpdate()
+                    ->first();
+
+                // 今日の notify_time をベースに remind_at 作成（notify_time は "HH:MM:SS" 想定）
                 $remindAt = $todayStart->copy()->setTimeFromTimeString($notifyTime);
 
                 if ($offsetMin !== 0) {
                     $remindAt = $remindAt->copy()->subMinutes($offsetMin);
                 }
 
-                // ★ここが肝：過去なら必ず「次回（翌日）」に繰り越す
+                // 過去なら翌日に繰り越す（= 必ず未来）
                 if ($remindAt->lte($now)) {
                     $remindAt = $remindAt->addDay();
                 }
 
-                // 既存の pending ルート（parent_task_id NULL）を探す
-                // ※ snooze/派生は parent_task_id が入る想定なので除外できる
-                $existing = DB::table('remind_tasks')
+                // 既存の pending ルート（parent_task_id NULL）をロックして取得
+                $existingTasks = DB::table('remind_tasks')
                     ->where('habit_time_id', $habitTimeId)
                     ->whereNull('parent_task_id')
                     ->where('status', 'pending')
                     ->orderByDesc('id')
-                    ->first();
+                    ->lockForUpdate()
+                    ->get();
 
-                if ($existing) {
-                    // remind_at が違う or 過去に残ってるなら更新
-                    $needUpdate = false;
+                if ($existingTasks->isNotEmpty()) {
+                    $existing = $existingTasks->first();
 
-                    $existingAt = Carbon::parse($existing->remind_at);
-                    if (!$existingAt->equalTo($remindAt)) {
-                        $needUpdate = true;
+                    // ★重複 pending root の安全な解消（D/G対策）
+                    // - 子が無い extra root → delete
+                    // - 子がある extra root → delete せず cancelled に落とす（参照整合性を壊さない）
+                    if ($existingTasks->count() > 1) {
+                        $extraIds = $existingTasks->slice(1)->pluck('id')->map(fn($v) => (int)$v)->all();
+
+                        if (!empty($extraIds)) {
+                            $childCounts = DB::table('remind_tasks')
+                                ->select('parent_task_id', DB::raw('COUNT(*) as c'))
+                                ->whereIn('parent_task_id', $extraIds)
+                                ->groupBy('parent_task_id')
+                                ->pluck('c', 'parent_task_id')
+                                ->all();
+
+                            $deleteIds = [];
+                            $cancelIds = [];
+
+                            foreach ($extraIds as $eid) {
+                                $hasChild = isset($childCounts[$eid]) && (int)$childCounts[$eid] > 0;
+                                if ($hasChild) {
+                                    $cancelIds[] = $eid;
+                                } else {
+                                    $deleteIds[] = $eid;
+                                }
+                            }
+
+                            if (!empty($cancelIds)) {
+                                DB::table('remind_tasks')
+                                    ->whereIn('id', $cancelIds)
+                                    ->update([
+                                        'status'     => 'cancelled',
+                                        'last_error' => 'deduped by scheduler (extra pending root had children)',
+                                        'updated_at' => $now->format('Y-m-d H:i:s'),
+                                    ]);
+                                $deduped += count($cancelIds);
+                            }
+
+                            if (!empty($deleteIds)) {
+                                DB::table('remind_tasks')
+                                    ->whereIn('id', $deleteIds)
+                                    ->delete();
+                                $deduped += count($deleteIds);
+                            }
+                        }
                     }
-                    // root_task_id が未設定なら揃える（保険）
+
+                    // ★TZを明示して比較（B対策の本体）
+                    try {
+                        $existingAt = Carbon::createFromFormat('Y-m-d H:i:s', (string)$existing->remind_at, $tz);
+                    } catch (\Throwable $e) {
+                        $existingAt = Carbon::parse((string)$existing->remind_at, $tz);
+                    }
+
+                    $needUpdate = !$existingAt->equalTo($remindAt);
+
+                    // root_task_id が未設定/不整合なら揃える（保険）
                     $needFixRoot = (empty($existing->root_task_id) || (int)$existing->root_task_id !== (int)$existing->id);
 
                     if ($needUpdate || $needFixRoot) {
@@ -112,6 +176,7 @@ class TodayReminderScheduler
                                 'root_task_id' => (int)$existing->id,
                                 'updated_at'   => $now->format('Y-m-d H:i:s'),
                             ]);
+                        $updated++;
                     }
 
                     continue;
@@ -122,7 +187,7 @@ class TodayReminderScheduler
                     'habit_log_id'   => null,
                     'habit_time_id'  => $habitTimeId,
                     'parent_task_id' => null,
-                    'root_task_id'   => null, // 後で自分のIDを入れる
+                    'root_task_id'   => null,
                     'remind_at'      => $remindAt->format('Y-m-d H:i:s'),
                     'sent_at'        => null,
                     'reschedule'     => null,
@@ -144,6 +209,18 @@ class TodayReminderScheduler
             }
         });
 
+        // ログは「変化があったときだけ」出す（運用ログを殺さない）
+        if ($created > 0 || $updated > 0 || $deduped > 0) {
+            Log::info('TodayReminderScheduler ensureFromTodayPayload summary', [
+                'user_id'  => $userId,
+                'created'  => $created,
+                'updated'  => $updated,
+                'deduped'  => $deduped,
+                'timezone' => $tz,
+            ]);
+        }
+
+        // 既存仕様：新規作成件数だけ返す
         return (int)$created;
     }
 }

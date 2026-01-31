@@ -59,6 +59,11 @@ class WebPushService
             ];
         }
 
+        // ★「PC閉じてる間に溜めない」: TTL を短くする（秒）
+        // 推奨: grace window と同じ 10分 (=600)
+        $ttlSeconds = (int) config('webpush.ttl_seconds', 600);
+        $ttlSeconds = max(60, min(3600, $ttlSeconds)); // 安全クランプ: 1分〜1時間
+
         $webPush = new WebPush(['VAPID' => $vapid]);
 
         $json = json_encode($payload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
@@ -114,7 +119,13 @@ class WebPushService
                 'contentEncoding' => $sub->content_encoding ?: 'aes128gcm',
             ]);
 
-            $webPush->queueNotification($subscription, $json);
+            // ★TTL を明示して queue（Minishlink/WebPush の option）
+            // これで「期限内に届かなければ破棄」を Push サービス側にも伝えられる
+            $webPush->queueNotification($subscription, $json, [
+                'TTL' => $ttlSeconds,
+                // urgency/topic を使いたければここで追加できる
+                // 'urgency' => 'normal',
+            ]);
             $queued++;
 
             // 足跡（成功/失敗に関係なく「使おうとした」記録）

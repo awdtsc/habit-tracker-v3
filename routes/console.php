@@ -22,17 +22,13 @@ Schedule::command('sanctum:prune-expired --hours=24')
 // M3: Dispatch due reminders (web push)
 // - Run every minute
 // - withoutOverlapping: prevent concurrent runs
-//
-// Notes:
-// - Use schedule:work in local dev
-//   php artisan schedule:work
-// - Verify with:
-//   php artisan schedule:list
+// - onOneServer: multi-host safety (requires cache lock backend)
 // ------------------------------------------------------------
 Schedule::command('remind:dispatch --limit=50')
     ->everyMinute()
     ->timezone('Asia/Tokyo')
     ->withoutOverlapping()
+    ->onOneServer()
     ->name('remind:dispatch');
 
 // ------------------------------------------------------------
@@ -44,10 +40,24 @@ Schedule::command('remind:plan --days=2')
     ->dailyAt('00:05')
     ->timezone('Asia/Tokyo')
     ->withoutOverlapping()
+    ->onOneServer()
     ->name('remind:plan:daily');
 
 Schedule::command('remind:plan --days=2')
     ->everyThreeHours()
     ->timezone('Asia/Tokyo')
     ->withoutOverlapping()
+    ->onOneServer()
     ->name('remind:plan:net');
+
+// ------------------------------------------------------------
+// M5: Prune expired_grace skipped tasks
+// - Keep DB lean (no backlog)
+// - Run daily (JST)
+// ------------------------------------------------------------
+Schedule::command('remind:prune-expired-grace --days=14')
+    ->dailyAt('03:10')
+    ->timezone('Asia/Tokyo')
+    ->withoutOverlapping()
+    ->onOneServer()
+    ->name('remind:prune-expired-grace');

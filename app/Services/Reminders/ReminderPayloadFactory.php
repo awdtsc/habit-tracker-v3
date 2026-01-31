@@ -26,7 +26,7 @@ class ReminderPayloadFactory
     {
         // $ctx: [
         //   'app_url', 'task_id', 'habit_time_id', 'habit_id', 'habit_title',
-        //   'time_slot', 'evaluation_type', 'date_ymd', 'root_task_id', 'parent_task_id'
+        //   'time_slot', 'evaluation_type', 'date_ymd'
         // ]
         $appUrl = $this->safeAppUrl((string)$ctx['app_url']);
         $date = (string)$ctx['date_ymd'];
@@ -61,8 +61,6 @@ class ReminderPayloadFactory
             'time_slot' => $timeSlot,
             'evaluation_type' => $evalType,
             'date' => $date,
-            'root_task_id' => $ctx['root_task_id'] ?? null,
-            'parent_task_id' => $ctx['parent_task_id'] ?? null,
             'ts' => $this->nowJstIso(),
         ];
     }

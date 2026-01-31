@@ -9,7 +9,16 @@ use Minishlink\WebPush\WebPush;
 class WebPushService
 {
     /**
-     * @return array{ok:bool, queued:int, sent:int, failed:int, skipped:int, removed:int, message:string, failures:array<int,array<string,mixed>>}
+     * @return array{
+     *   ok:bool,
+     *   queued:int,
+     *   sent:int,
+     *   failed:int,
+     *   skipped:int,
+     *   removed:int,
+     *   message:string,
+     *   failures:array<int,array<string,mixed>>
+     * }
      */
     public function sendToUser(int $userId, array $payload): array
     {
@@ -52,8 +61,19 @@ class WebPushService
 
         $webPush = new WebPush(['VAPID' => $vapid]);
 
-        // SW 側で扱いやすいJSONに固定
         $json = json_encode($payload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+        if ($json === false) {
+            return [
+                'ok' => false,
+                'queued' => 0,
+                'sent' => 0,
+                'failed' => 0,
+                'skipped' => 0,
+                'removed' => 0,
+                'message' => 'json_encode failed',
+                'failures' => [],
+            ];
+        }
 
         $queued = 0;
         $sent = 0;
@@ -78,8 +98,8 @@ class WebPushService
             if ($endpoint === '' || $p256dh === '' || $authToken === '') {
                 $skipped++;
                 $failures[] = [
-                    'endpoint_hash' => $sub->endpoint_hash ?? null,
-                    'reason' => 'missing endpoint/p256dh/auth in DB row',
+                    'endpoint_hash' => $sub->endpoint_hash ?? $this->endpointHash($endpoint),
+                    'reason' => $this->safeReason('missing endpoint/p256dh/auth in DB row'),
                     'has_endpoint' => $endpoint !== '',
                     'has_p256dh' => $p256dh !== '',
                     'has_auth' => $authToken !== '',
@@ -105,6 +125,7 @@ class WebPushService
 
         foreach ($webPush->flush() as $report) {
             $endpoint = method_exists($report, 'getEndpoint') ? $report->getEndpoint() : null;
+            $endpointHash = $this->endpointHash($endpoint);
 
             if ($report->isSuccess()) {
                 $sent++;
@@ -124,14 +145,15 @@ class WebPushService
             }
 
             $failures[] = [
-                'endpoint' => $endpoint,
+                'endpoint_hash' => $endpointHash,
                 'status' => $statusCode,
-                'reason' => $reason,
+                'reason' => $this->safeReason((string)$reason),
             ];
 
             // ★410/404 は購読が死んでいるので自動削除（運用事故防止）
             if ($endpoint && ($statusCode === 410 || $statusCode === 404)) {
-                $hash = strtoupper(hash('sha256', (string)$endpoint));
+                $hash = $endpointHash ?? strtoupper(hash('sha256', (string)$endpoint));
+
                 $deleted = PushSubscription::query()
                     ->where('user_id', $userId)
                     ->where('endpoint_hash', $hash)
@@ -154,5 +176,21 @@ class WebPushService
             // 出しすぎ防止：先頭5件だけ返す（必要なら増やす）
             'failures' => array_slice($failures, 0, 5),
         ];
+    }
+
+    private function safeReason(string $reason): string
+    {
+        $reason = preg_replace('~https?://\S+~u', '[url]', $reason) ?? $reason;
+        $reason = preg_replace('~([A-Za-z0-9_\-]{40,})~u', '[redacted]', $reason) ?? $reason;
+        return mb_strimwidth($reason, 0, 200, '…', 'UTF-8');
+    }
+
+    private function endpointHash(?string $endpoint): ?string
+    {
+        if (!$endpoint) {
+            return null;
+        }
+
+        return strtoupper(hash('sha256', (string)$endpoint));
     }
 }

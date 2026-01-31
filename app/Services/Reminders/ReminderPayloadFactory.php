@@ -28,14 +28,16 @@ class ReminderPayloadFactory
         //   'app_url', 'task_id', 'habit_time_id', 'habit_id', 'habit_title',
         //   'time_slot', 'evaluation_type', 'date_ymd', 'root_task_id', 'parent_task_id'
         // ]
-        $appUrl = rtrim((string)$ctx['app_url'], '/');
+        $appUrl = $this->safeAppUrl((string)$ctx['app_url']);
         $date = (string)$ctx['date_ymd'];
 
-        $title = 'Habit Reminder';
-        $body = '時間です。今日の習慣をチェックしよう。';
+        $title = $this->sanitizeText('Habit Reminder', 60);
+        $body = $this->sanitizeText('時間です。今日の習慣をチェックしよう。', 200);
+
         $habitTitle = (string)($ctx['habit_title'] ?? '');
         if ($habitTitle !== '') {
-            $body = "「{$habitTitle}」の時間です。";
+            $habitTitle = $this->sanitizeText($habitTitle, 60);
+            $body = $this->sanitizeText("「{$habitTitle}」の時間です。", 200);
         }
 
         $evalType = (string)($ctx['evaluation_type'] ?? 'simple');
@@ -68,15 +70,23 @@ class ReminderPayloadFactory
     public function digestPayload(array $ctx): array
     {
         // $ctx: ['app_url','count','date_ymd','top_titles'=>string[]]
-        $appUrl = rtrim((string)$ctx['app_url'], '/');
+        $appUrl = $this->safeAppUrl((string)$ctx['app_url']);
         $count  = (int)$ctx['count'];
         $date   = (string)$ctx['date_ymd'];
         $topTitles = $ctx['top_titles'] ?? [];
 
-        $title = 'Habit Reminder';
-        $body  = "未確認のリマインドが{$count}件あります。タップして確認。";
+        $title = $this->sanitizeText('Habit Reminder', 60);
+        $body  = $this->sanitizeText("未確認のリマインドが{$count}件あります。タップして確認。", 200, true);
+
         if (!empty($topTitles)) {
+            $topTitles = array_slice($topTitles, 0, 5);
+            $topTitles = array_map(
+                fn($t) => $this->sanitizeText((string)$t, 40, true),
+                $topTitles
+            );
+
             $body .= "\n" . implode("\n", array_map(fn($t) => '・' . $t, $topTitles));
+            $body = $this->sanitizeText($body, 240, true);
         }
 
         $url = $appUrl . '/today'
@@ -151,5 +161,40 @@ class ReminderPayloadFactory
         // 40文字以上のトークンっぽい文字列を除去
         $s = preg_replace('~([A-Za-z0-9_\-]{40,})~u', '[redacted]', $s) ?? $s;
         return $s;
+    }
+
+    private function sanitizeText(string $text, int $maxLen, bool $allowNewlines = false): string
+    {
+        $pattern = $allowNewlines ? '~(?!\n)\p{C}~u' : '~\p{C}~u';
+        $text = preg_replace($pattern, '', $text) ?? $text;
+        return mb_strimwidth($text, 0, $maxLen, '…', 'UTF-8');
+    }
+
+    private function safeAppUrl(string $appUrl): string
+    {
+        $appUrl = trim($appUrl);
+        if ($appUrl === '') {
+            return '';
+        }
+
+        $parts = parse_url($appUrl);
+        if ($parts === false) {
+            return '';
+        }
+
+        $scheme = strtolower((string)($parts['scheme'] ?? ''));
+        if ($scheme !== '' && !in_array($scheme, ['http', 'https'], true)) {
+            return '';
+        }
+
+        if ($scheme === '' && !str_starts_with($appUrl, '/')) {
+            return '';
+        }
+
+        if ($scheme !== '' && empty($parts['host'])) {
+            return '';
+        }
+
+        return rtrim($appUrl, '/');
     }
 }

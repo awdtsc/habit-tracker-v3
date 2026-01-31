@@ -12,20 +12,25 @@ class TodayReminderScheduler
     /**
      * TodayPayload から「次回の remind_tasks（pending のルート）」を確実に用意する。
      *
-     * - habit_time ごとに「次回の remind_at」を計算（今日の notify_time - offset、過去なら翌日に繰越）
-     * - 既存の pending ルートがあれば remind_at を更新（必要なときだけ）
-     * - なければ新規作成し、root_task_id を自分自身の id に揃える
+     * 重要（Planと衝突しないため）:
+     * - habit_time_id だけで pending root を潰さない（未来日の予定を壊さない）
+     * - この関数が計算した remind_at（=次回分）に対してのみ存在保証する
+     * - dedupe は「同じ remind_at の pending root が複数ある場合」のみに限定する
      *
      * @return int 新規作成した件数
      */
     public function ensureFromTodayPayload(int $userId, array $payload, string $tz = 'Asia/Tokyo'): int
     {
-        // payload から habit_time_id を集める（TodayController と同じ）
+        // payload から habit_time_id を集める
         $habitTimeIds = [];
         foreach (($payload['habits'] ?? []) as $it) {
-            if (!is_array($it)) continue;
+            if (!is_array($it)) {
+                continue;
+            }
             $htId = (int)($it['habit_time_id'] ?? 0);
-            if ($htId > 0) $habitTimeIds[$htId] = true;
+            if ($htId > 0) {
+                $habitTimeIds[$htId] = true;
+            }
         }
         $habitTimeIds = array_keys($habitTimeIds);
         sort($habitTimeIds);
@@ -55,12 +60,13 @@ class TodayReminderScheduler
 
         $now = Carbon::now($tz);
         $todayStart = $now->copy()->startOfDay();
+        $nowStr = $now->format('Y-m-d H:i:s');
 
         $created = 0;
         $updated = 0;
         $deduped = 0;
 
-        DB::transaction(function () use ($rows, $now, $todayStart, $tz, &$created, &$updated, &$deduped) {
+        DB::transaction(function () use ($rows, $now, $todayStart, $nowStr, &$created, &$updated, &$deduped) {
 
             foreach ($rows as $r) {
                 // archived はスケジューリング対象外
@@ -80,7 +86,7 @@ class TodayReminderScheduler
 
                 $offsetMin = (int)($r->remind_offset ?? 0);
 
-                // ★同一 habit_time の並行実行を直列化（E対策の本体）
+                // ★同一 habit_time の並行実行を直列化（Today API 多重叩き対策）
                 DB::table('habit_times')
                     ->where('id', $habitTimeId)
                     ->lockForUpdate()
@@ -98,11 +104,14 @@ class TodayReminderScheduler
                     $remindAt = $remindAt->addDay();
                 }
 
-                // 既存の pending ルート（parent_task_id NULL）をロックして取得
+                $remindAtStr = $remindAt->format('Y-m-d H:i:s');
+
+                // ★同じ remind_at の pending root のみを見る（未来日の予定は破壊しない）
                 $existingTasks = DB::table('remind_tasks')
                     ->where('habit_time_id', $habitTimeId)
                     ->whereNull('parent_task_id')
                     ->where('status', 'pending')
+                    ->where('remind_at', $remindAtStr)
                     ->orderByDesc('id')
                     ->lockForUpdate()
                     ->get();
@@ -110,9 +119,7 @@ class TodayReminderScheduler
                 if ($existingTasks->isNotEmpty()) {
                     $existing = $existingTasks->first();
 
-                    // ★重複 pending root の安全な解消（D/G対策）
-                    // - 子が無い extra root → delete
-                    // - 子がある extra root → delete せず cancelled に落とす（参照整合性を壊さない）
+                    // 同一 remind_at の重複のみ解消
                     if ($existingTasks->count() > 1) {
                         $extraIds = $existingTasks->slice(1)->pluck('id')->map(fn($v) => (int)$v)->all();
 
@@ -141,8 +148,8 @@ class TodayReminderScheduler
                                     ->whereIn('id', $cancelIds)
                                     ->update([
                                         'status'     => 'cancelled',
-                                        'last_error' => 'deduped by scheduler (extra pending root had children)',
-                                        'updated_at' => $now->format('Y-m-d H:i:s'),
+                                        'last_error' => 'deduped by today scheduler (same remind_at)',
+                                        'updated_at' => $nowStr,
                                     ]);
                                 $deduped += count($cancelIds);
                             }
@@ -156,25 +163,14 @@ class TodayReminderScheduler
                         }
                     }
 
-                    // ★TZを明示して比較（B対策の本体）
-                    try {
-                        $existingAt = Carbon::createFromFormat('Y-m-d H:i:s', (string)$existing->remind_at, $tz);
-                    } catch (\Throwable $e) {
-                        $existingAt = Carbon::parse((string)$existing->remind_at, $tz);
-                    }
-
-                    $needUpdate = !$existingAt->equalTo($remindAt);
-
-                    // root_task_id が未設定/不整合なら揃える（保険）
+                    // root_task_id が未設定/不整合なら揃える
                     $needFixRoot = (empty($existing->root_task_id) || (int)$existing->root_task_id !== (int)$existing->id);
-
-                    if ($needUpdate || $needFixRoot) {
+                    if ($needFixRoot) {
                         DB::table('remind_tasks')
                             ->where('id', (int)$existing->id)
                             ->update([
-                                'remind_at'    => $remindAt->format('Y-m-d H:i:s'),
                                 'root_task_id' => (int)$existing->id,
-                                'updated_at'   => $now->format('Y-m-d H:i:s'),
+                                'updated_at'   => $nowStr,
                             ]);
                         $updated++;
                     }
@@ -182,34 +178,59 @@ class TodayReminderScheduler
                     continue;
                 }
 
-                // 無ければ新規作成（root_task_id は insert 後に自分自身へ）
-                $newId = DB::table('remind_tasks')->insertGetId([
-                    'habit_log_id'   => null,
-                    'habit_time_id'  => $habitTimeId,
-                    'parent_task_id' => null,
-                    'root_task_id'   => null,
-                    'remind_at'      => $remindAt->format('Y-m-d H:i:s'),
-                    'sent_at'        => null,
-                    'reschedule'     => null,
-                    'status'         => 'pending',
-                    'claim_token'    => null,
-                    'last_error'     => null,
-                    'created_at'     => $now->format('Y-m-d H:i:s'),
-                    'updated_at'     => $now->format('Y-m-d H:i:s'),
-                ]);
-
-                DB::table('remind_tasks')
-                    ->where('id', (int)$newId)
-                    ->update([
-                        'root_task_id' => (int)$newId,
-                        'updated_at'   => $now->format('Y-m-d H:i:s'),
+                // 無ければ新規作成（競合したら取り直して root を揃える）
+                try {
+                    $newId = DB::table('remind_tasks')->insertGetId([
+                        'habit_log_id'   => null,
+                        'habit_time_id'  => $habitTimeId,
+                        'parent_task_id' => null,
+                        'root_task_id'   => null,
+                        'remind_at'      => $remindAtStr,
+                        'sent_at'        => null,
+                        'reschedule'     => null,
+                        'status'         => 'pending',
+                        'claim_token'    => null,
+                        'last_error'     => null,
+                        'created_at'     => $nowStr,
+                        'updated_at'     => $nowStr,
                     ]);
 
-                $created++;
+                    DB::table('remind_tasks')
+                        ->where('id', (int)$newId)
+                        ->update([
+                            'root_task_id' => (int)$newId,
+                            'updated_at'   => $nowStr,
+                        ]);
+
+                    $created++;
+                } catch (\Throwable $e) {
+                    // 競合で同じ remind_at が作られた可能性 → 取り直して root を揃える
+                    $again = DB::table('remind_tasks')
+                        ->where('habit_time_id', $habitTimeId)
+                        ->whereNull('parent_task_id')
+                        ->where('status', 'pending')
+                        ->where('remind_at', $remindAtStr)
+                        ->orderByDesc('id')
+                        ->lockForUpdate()
+                        ->first();
+
+                    if ($again) {
+                        $needFixRoot = (empty($again->root_task_id) || (int)$again->root_task_id !== (int)$again->id);
+                        if ($needFixRoot) {
+                            DB::table('remind_tasks')
+                                ->where('id', (int)$again->id)
+                                ->update([
+                                    'root_task_id' => (int)$again->id,
+                                    'updated_at'   => $nowStr,
+                                ]);
+                            $updated++;
+                        }
+                    }
+                }
             }
         });
 
-        // ログは「変化があったときだけ」出す（運用ログを殺さない）
+        // ログは「変化があったときだけ」出す
         if ($created > 0 || $updated > 0 || $deduped > 0) {
             Log::info('TodayReminderScheduler ensureFromTodayPayload summary', [
                 'user_id'  => $userId,
@@ -220,7 +241,6 @@ class TodayReminderScheduler
             ]);
         }
 
-        // 既存仕様：新規作成件数だけ返す
         return (int)$created;
     }
 }

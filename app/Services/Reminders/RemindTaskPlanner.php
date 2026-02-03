@@ -18,6 +18,25 @@ class RemindTaskPlanner
         $now = now($tz);
         $today = $now->toDateString();
 
+        // ★この planning 範囲で既存 remind_tasks を先読みし、重複生成を抑止
+        $rangeStart = $now->copy()->startOfDay();
+        $rangeEnd = $now->copy()->addDays($days - 1)->endOfDay();
+
+        $existing = DB::table('remind_tasks')
+            ->select(['habit_time_id', 'remind_at'])
+            ->whereBetween('remind_at', [
+                $rangeStart->toDateTimeString(),
+                $rangeEnd->toDateTimeString(),
+            ])
+            ->get();
+
+        $existingMap = [];
+        foreach ($existing as $row) {
+            $habitTimeId = (int) $row->habit_time_id;
+            $remindAt = (string) $row->remind_at;
+            $existingMap[$habitTimeId][$remindAt] = true;
+        }
+
         // ★notify_time がある habit_time だけ対象にする
         $habitTimes = DB::table('habit_times as ht')
             ->select([
@@ -31,7 +50,6 @@ class RemindTaskPlanner
 
         $created = 0;
         $skipped = 0;
-        $ignoredNoNotify = 0;
 
         // 参考：全体のうち notify_time が無い数（デバッグ用）
         $ignoredNoNotify = (int) DB::table('habit_times')
@@ -52,10 +70,13 @@ class RemindTaskPlanner
 
                 $remindAt = Carbon::parse($date . ' ' . $time, $tz);
 
-                $offsetMin = (int)($ht->remind_offset ?? 0);
+                $offsetMin = (int) ($ht->remind_offset ?? 0);
                 if ($offsetMin !== 0) {
                     $remindAt = $remindAt->copy()->addMinutes($offsetMin);
                 }
+
+                $remindAtString = $remindAt->toDateTimeString();
+                $habitTimeId = (int) $ht->habit_time_id;
 
                 // 今日分は「過去時刻」を作らない
                 if ($date === $today && $remindAt->lessThanOrEqualTo($now)) {
@@ -63,10 +84,19 @@ class RemindTaskPlanner
                     continue;
                 }
 
+                // ★既存 or 同一run内での重複をスキップ
+                if (isset($existingMap[$habitTimeId][$remindAtString])) {
+                    $skipped++;
+                    continue;
+                }
+
+                // ★同一run内の重複抑止（候補に入れた時点でマーク）
+                $existingMap[$habitTimeId][$remindAtString] = true;
+
                 $rows[] = [
-                    'habit_time_id' => (int)$ht->habit_time_id,
+                    'habit_time_id' => $habitTimeId,
                     'status' => 'pending',
-                    'remind_at' => $remindAt->toDateTimeString(),
+                    'remind_at' => $remindAtString,
                     'attempts' => 0,
                     'claim_token' => null,
                     'last_error' => null,
@@ -77,10 +107,13 @@ class RemindTaskPlanner
                 ];
             }
 
-            if (empty($rows)) continue;
+            if (empty($rows)) {
+                continue;
+            }
 
+            // ★DB側でも ignore して二重を最終防衛（ユニークキー前提 or ignore運用）
             $inserted = DB::table('remind_tasks')->insertOrIgnore($rows);
-            $created += (int)$inserted;
+            $created += (int) $inserted;
 
             if ($debug && $console) {
                 $console->line("plan date={$date} inserted={$inserted} candidates=" . count($rows));
@@ -96,10 +129,14 @@ class RemindTaskPlanner
 
     private function normalizeTimeString($notifyTime): ?string
     {
-        if ($notifyTime === null) return null;
+        if ($notifyTime === null) {
+            return null;
+        }
 
-        $s = trim((string)$notifyTime);
-        if ($s === '') return null;
+        $s = trim((string) $notifyTime);
+        if ($s === '') {
+            return null;
+        }
 
         if (preg_match('/^\d{1,2}:\d{2}$/', $s)) {
             [$h, $m] = explode(':', $s);

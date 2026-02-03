@@ -2,8 +2,9 @@
 
 namespace App\Console\Commands;
 
-use Illuminate\Console\Command;
 use App\Services\Reminders\RemindTaskPlanner;
+use Illuminate\Console\Command;
+use Illuminate\Support\Facades\DB;
 
 class RemindPlan extends Command
 {
@@ -13,12 +14,36 @@ class RemindPlan extends Command
     public function handle(RemindTaskPlanner $planner): int
     {
         $days = (int) $this->option('days');
+        $days = max(1, min(14, $days));
         $debug = (bool) ((int) $this->option('debug'));
 
-        $res = $planner->plan($days, $debug, $this);
+        $lockName = 'remind_plan_lock';
+        $lockAcquired = false;
+        $driver = DB::getDriverName();
 
-        $this->info("created={$res['created']} skipped={$res['skipped']} days={$days}");
+        try {
+            if ($driver === 'mysql') {
+                $lockRow = DB::selectOne('SELECT GET_LOCK(?, 0) as l', [$lockName]);
+                $lockAcquired = isset($lockRow->l) && (int) $lockRow->l === 1;
+            } else {
+                // mysql以外はGET_LOCKが無いので、ここでは通す（必要なら後で分岐強化）
+                $lockAcquired = true;
+            }
 
-        return self::SUCCESS;
+            if (!$lockAcquired) {
+                $this->warn('remind:plan skipped: lock not acquired');
+                return self::SUCCESS;
+            }
+
+            $res = $planner->plan($days, $debug, $this);
+
+            $this->info("created={$res['created']} skipped={$res['skipped']} days={$days}");
+
+            return self::SUCCESS;
+        } finally {
+            if ($lockAcquired && $driver === 'mysql') {
+                DB::select('SELECT RELEASE_LOCK(?) as l', [$lockName]);
+            }
+        }
     }
 }

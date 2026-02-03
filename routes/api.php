@@ -70,9 +70,9 @@ Route::prefix('v1')->group(function () {
         | - 子レコード方式（parent_task_id / root_task_id）前提
         | - 通知クリックからの操作（snooze/done/cancel）
         */
-        Route::post('/reminders/{task}/snooze', [ReminderController::class, 'snooze']);
-        Route::post('/reminders/{task}/done',   [ReminderController::class, 'done']);
-        Route::post('/reminders/{task}/cancel', [ReminderController::class, 'cancel']);
+        Route::post('/reminders/{task}/snooze', [ReminderController::class, 'snooze'])->whereNumber('task');
+        Route::post('/reminders/{task}/done',   [ReminderController::class, 'done'])->whereNumber('task');
+        Route::post('/reminders/{task}/cancel', [ReminderController::class, 'cancel'])->whereNumber('task');
 
         /*
         |----------------------------------------------------------------------

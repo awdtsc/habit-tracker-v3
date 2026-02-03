@@ -6,7 +6,8 @@
  * - 通知クリック:
  *    - 既存タブがあれば focus
  *      - postMessage({type:'REMINDER_CLICK', payload}) を送る
- *      - 取りこぼし保険で /today?from=push&task_id=... へ navigate（可能なら）
+ *      - ★既に /today を開いているタブなら navigate しない（URL二段階化防止）
+ *      - /today 以外の画面なら保険で /today?from=push&task_id=... へ navigate（可能なら）
  *    - タブが無ければ /today?from=push&task_id=... を openWindow
  *
  * 重要: data を削らずに通す（task_id / habit_time_id / date / evaluation_type など）
@@ -39,6 +40,16 @@ function toAbsoluteUrl(origin, urlOrPath) {
         return new URL(urlOrPath || "/today?from=push", origin).href;
     } catch (e) {
         return origin + "/today?from=push";
+    }
+}
+
+function isTodayPageUrl(origin, clientUrl) {
+    try {
+        const u = new URL(clientUrl);
+        if (!u.href.startsWith(origin)) return false;
+        return u.pathname === "/today";
+    } catch (e) {
+        return false;
     }
 }
 
@@ -113,7 +124,7 @@ self.addEventListener("notificationclick", (event) => {
                     await target.focus();
                 } catch (e) {}
 
-                // 2) まず postMessage（最速でモーダルを開ける）
+                // 2) postMessage（最速でモーダルを開ける）
                 try {
                     target.postMessage({
                         type: "REMINDER_CLICK",
@@ -121,17 +132,25 @@ self.addEventListener("notificationclick", (event) => {
                     });
                 } catch (e) {}
 
-                // 3) 取りこぼし保険：navigate できるなら /today?from=push... へ
-                //    - postMessage を受け損ねても App.vue の openFromQueryIfNeeded が拾う
-                //    - 既に /today にいるなら邪魔しない（クエリだけ付けてもOK）
+                // ★ここが修正点：
+                // 既に /today を開いているなら URL をいじらない（SPA側のreplaceと競合して二段階になる）
+                const alreadyToday =
+                    typeof target.url === "string"
+                        ? isTodayPageUrl(origin, target.url)
+                        : false;
+                if (alreadyToday) {
+                    return;
+                }
+
+                // 3) /today以外を見ている場合だけ、取りこぼし保険で navigate
+                //    （postMessageを取り逃しても、/today?from=push が拾える）
                 try {
                     if (typeof target.navigate === "function") {
-                        // 既に today でも、from=pushでクエリ起動できるので openUrl に寄せる
                         await target.navigate(openUrl);
                     }
                 } catch (e) {}
 
-                // 4) navigate 後にもう一回 postMessage（さらに確度上げる）
+                // 4) navigate 後にもう一回 postMessage（確度上げ）
                 try {
                     target.postMessage({
                         type: "REMINDER_CLICK",
@@ -142,7 +161,7 @@ self.addEventListener("notificationclick", (event) => {
                 return;
             }
 
-            // タブがなければ開く
+            // タブがなければ開く（URLで拾えるように openUrl のまま）
             await self.clients.openWindow(openUrl);
         })(),
     );

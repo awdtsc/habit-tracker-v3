@@ -26,7 +26,7 @@ import {
   closeReminderModal,
 } from "@/state/reminderModal";
 
-import { ensureServiceWorkerRegistered } from "@/registerSw";
+import { ensureServiceWorkerRegistered } from "@/registerSw.js";
 
 const route = useRoute();
 const router = useRouter();

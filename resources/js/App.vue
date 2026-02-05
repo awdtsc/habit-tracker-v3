@@ -26,6 +26,8 @@ import {
   closeReminderModal,
 } from "@/state/reminderModal";
 
+import { ensureServiceWorkerRegistered } from "@/registerSw";
+
 const route = useRoute();
 const router = useRouter();
 
@@ -56,7 +58,7 @@ function openFromQueryIfNeeded() {
   openReminderModal({
     title: "Habit Reminder",
     body: "",
-    task_id: taskId != null ? (Number(taskId) || String(taskId)) : null,
+    task_id: taskId != null ? Number(taskId) || String(taskId) : null,
     url: route.fullPath,
   });
 
@@ -77,6 +79,9 @@ function onSwMessage(event) {
 
 onMounted(() => {
   prefetchOpposite(route.name);
+
+  // ★SWを起動時に保証（設定ページ依存を排除）
+  ensureServiceWorkerRegistered();
 
   // ★SWからの postMessage を受けてモーダルを開く
   if (navigator.serviceWorker) {

@@ -8,6 +8,7 @@
  *      - postMessage({type:'REMINDER_CLICK', payload}) を送る
  *      - ★既に /today を開いているタブなら navigate しない（URL二段階化防止）
  *      - /today 以外の画面なら保険で /today?from=push&task_id=... へ navigate（可能なら）
+ *      - ★navigate が失敗した場合は openWindow で救済（到達保証を上げる）
  *    - タブが無ければ /today?from=push&task_id=... を openWindow
  *
  * 重要:
@@ -45,7 +46,7 @@ function toSameOriginUrl(origin, urlOrPath, fallbackPath) {
         // NOTE: new URL handles:
         // - absolute: https://...
         // - relative: /today...
-        // - scheme-relative: //evil.com/... (=> cross-origin)  ← ★ここが落とし穴になりやすい
+        // - scheme-relative: //evil.com/... (=> cross-origin)
         const resolved = new URL(urlOrPath || fallback.href, origin);
 
         if (resolved.origin !== fallback.origin) return fallback.href;
@@ -87,58 +88,77 @@ function isTodayPageUrl(origin, clientUrl) {
     }
 }
 
+/**
+ * Push: json() を試して、失敗したら text() fallback（★必ず await）
+ * - Promise 混入を防ぎ、options.body を常に string に寄せる
+ */
 self.addEventListener("push", (event) => {
-    let payload = {};
-    try {
-        payload = event.data ? event.data.json() : {};
-    } catch (e) {
-        payload = {
-            title: "Habit Tracker",
-            body: event.data ? event.data.text() : "",
-        };
-    }
+    event.waitUntil(
+        (async () => {
+            let payload = {};
 
-    payload = normalizePayload(payload);
+            try {
+                payload = event.data ? event.data.json() : {};
+            } catch (e) {
+                let textBody = "";
+                try {
+                    textBody = event.data ? await event.data.text() : "";
+                } catch (_) {
+                    textBody = "";
+                }
+                payload = {
+                    title: "Habit Tracker",
+                    body: textBody,
+                };
+            }
 
-    const title = payload.title || "Habit Tracker";
-    const body = payload.body || "";
+            payload = normalizePayload(payload);
 
-    const taskId = pickTaskId(payload);
-    const origin = self.location.origin;
-    const fallbackPath = buildFallbackPath(taskId);
+            const title = payload.title || "Habit Tracker";
+            const body =
+                typeof payload.body === "string"
+                    ? payload.body
+                    : String(payload.body ?? "");
 
-    // ★重要: 通知クリックの遷移先は常に fallbackPath（/today?from=push...）に固定
-    // payload.url はナビゲーションには使わない（/today?week=... で週UIが残る事故を防ぐ）
-    const openUrl = toSameOriginUrl(origin, fallbackPath, fallbackPath);
+            const taskId = pickTaskId(payload);
+            const origin = self.location.origin;
+            const fallbackPath = buildFallbackPath(taskId);
 
-    const options = {
-        body,
-        // ★通知データは必要最小限に限定（トークン混入・任意URL混入を防止）
-        data: sanitizeNotificationData(payload, openUrl, taskId),
-        // tag を付けたいならここ（通知が積まれすぎるのが嫌なら）
-        // tag: taskId != null ? `reminder-${taskId}` : "reminder",
-    };
+            // ★重要: 通知クリックの遷移先は常に fallbackPath（/today?from=push...）に固定
+            // payload.url はナビゲーションには使わない（/today?week=... で週UIが残る事故を防ぐ）
+            const openUrl = toSameOriginUrl(origin, fallbackPath, fallbackPath);
 
-    event.waitUntil(self.registration.showNotification(title, options));
+            const options = {
+                body,
+                // ★通知データは必要最小限に限定（トークン混入・任意URL混入を防止）
+                data: sanitizeNotificationData(payload, openUrl, taskId),
+                // tag を付けたいならここ（通知が積まれすぎるのが嫌なら）
+                // tag: taskId != null ? `reminder-${taskId}` : "reminder",
+            };
+
+            await self.registration.showNotification(title, options);
+        })(),
+    );
 });
 
 self.addEventListener("notificationclick", (event) => {
     event.notification.close();
 
-    const data =
-        event.notification?.data && typeof event.notification.data === "object"
-            ? event.notification.data
-            : {};
-
-    const origin = self.location.origin;
-    const taskId = pickTaskId(data);
-    const fallbackPath = buildFallbackPath(taskId);
-
-    // ★重要: data.url も信用しない。常に /today?from=push... に固定
-    const openUrl = toSameOriginUrl(origin, fallbackPath, fallbackPath);
-
     event.waitUntil(
         (async () => {
+            const data =
+                event.notification?.data &&
+                typeof event.notification.data === "object"
+                    ? event.notification.data
+                    : {};
+
+            const origin = self.location.origin;
+            const taskId = pickTaskId(data);
+            const fallbackPath = buildFallbackPath(taskId);
+
+            // ★重要: data.url も信用しない。常に /today?from=push... に固定
+            const openUrl = toSameOriginUrl(origin, fallbackPath, fallbackPath);
+
             const clientList = await self.clients.matchAll({
                 type: "window",
                 includeUncontrolled: true,
@@ -150,41 +170,52 @@ self.addEventListener("notificationclick", (event) => {
             );
             const target = sameOrigin || clientList[0];
 
-            if (target) {
-                // 1) まずフォーカス
-                try {
-                    await target.focus();
-                } catch (e) {}
-
-                // 2) postMessage（最速でモーダルを開ける）
-                try {
-                    target.postMessage({
-                        type: "REMINDER_CLICK",
-                        payload: data,
-                    });
-                } catch (e) {}
-
-                // 3) すでに /today のタブなら navigate しない（URL二段階化防止）
-                if (isTodayPageUrl(origin, target.url)) return;
-
-                // 4) navigate できるなら /today に寄せる（postMessage取り逃し保険）
-                try {
-                    await target.navigate(openUrl);
-                } catch (e) {}
-
-                // 5) navigate 後にもう一回 postMessage（確度上げ）
-                try {
-                    target.postMessage({
-                        type: "REMINDER_CLICK",
-                        payload: data,
-                    });
-                } catch (e) {}
-
+            if (!target) {
+                // タブがなければ openWindow
+                await self.clients.openWindow(openUrl);
                 return;
             }
 
-            // タブがなければ openWindow
-            await self.clients.openWindow(openUrl);
+            // 1) まずフォーカス
+            try {
+                await target.focus();
+            } catch (_) {}
+
+            // 2) postMessage（最速でモーダルを開ける）
+            try {
+                target.postMessage({
+                    type: "REMINDER_CLICK",
+                    payload: data,
+                });
+            } catch (_) {}
+
+            // 3) すでに /today のタブなら navigate しない（URL二段階化防止）
+            if (isTodayPageUrl(origin, target.url)) return;
+
+            // 4) navigate できるなら /today に寄せる（postMessage取り逃し保険）
+            //    ★失敗したら openWindow で救済して到達保証を上げる
+            let navigated = false;
+            try {
+                await target.navigate(openUrl);
+                navigated = true;
+            } catch (_) {
+                navigated = false;
+            }
+
+            // 5) navigate 後にもう一回 postMessage（確度上げ）
+            try {
+                target.postMessage({
+                    type: "REMINDER_CLICK",
+                    payload: data,
+                });
+            } catch (_) {}
+
+            // ★救済: navigate が失敗した場合は openWindow で /today コンテキストを必ず作る
+            if (!navigated) {
+                try {
+                    await self.clients.openWindow(openUrl);
+                } catch (_) {}
+            }
         })(),
     );
 });

@@ -31,16 +31,44 @@ function buildFallbackPath(taskId) {
         : `/today?from=push`;
 }
 
-function toAbsoluteUrl(origin, urlOrPath) {
+/**
+ * Same-origin only URL resolver.
+ * - Accepts absolute or relative URLs but forces same-origin
+ * - Falls back to fallbackPath (same-origin) if invalid or cross-origin
+ */
+function toSameOriginUrl(origin, urlOrPath, fallbackPath) {
+    const fallback = new URL(fallbackPath || "/today?from=push", origin);
+
     try {
-        // すでに絶対URLならそのまま
-        if (typeof urlOrPath === "string" && urlOrPath.startsWith("http"))
-            return urlOrPath;
-        // 相対なら origin で解決
-        return new URL(urlOrPath || "/today?from=push", origin).href;
+        // NOTE: new URL handles:
+        // - absolute: https://...
+        // - relative: /today...
+        // - scheme-relative: //evil.com/... (=> cross-origin)  ← ★ここが落とし穴になりやすい
+        const resolved = new URL(urlOrPath || fallback.href, origin);
+
+        if (resolved.origin !== fallback.origin) return fallback.href;
+        return resolved.href;
     } catch (e) {
-        return origin + "/today?from=push";
+        return fallback.href;
     }
+}
+
+function normalizePayload(input) {
+    if (input && typeof input === "object" && !Array.isArray(input))
+        return input;
+    return {};
+}
+
+function sanitizeNotificationData(payload, openUrl, taskId) {
+    return {
+        title: payload.title ?? "Habit Tracker",
+        body: payload.body ?? "",
+        task_id: taskId,
+        habit_time_id: payload.habit_time_id ?? null,
+        date: payload.date ?? null,
+        evaluation_type: payload.evaluation_type ?? null,
+        url: openUrl,
+    };
 }
 
 function isTodayPageUrl(origin, clientUrl) {
@@ -64,24 +92,26 @@ self.addEventListener("push", (event) => {
         };
     }
 
+    payload = normalizePayload(payload);
+
     const title = payload.title || "Habit Tracker";
     const body = payload.body || "";
 
     const taskId = pickTaskId(payload);
-
     const origin = self.location.origin;
     const fallbackPath = buildFallbackPath(taskId);
 
-    // url がpayloadにあるならそれを優先、無ければ fallbackPath
-    const url =
+    const rawUrl =
         typeof payload.url === "string" && payload.url.length > 0
             ? payload.url
             : fallbackPath;
 
+    const openUrl = toSameOriginUrl(origin, rawUrl, fallbackPath);
+
     const options = {
         body,
-        // ★ここが肝：payload を丸ごと data に入れる（urlも含める）
-        data: { ...payload, url },
+        // ★通知データは必要最小限に限定（トークン混入を防止）
+        data: sanitizeNotificationData(payload, openUrl, taskId),
         // tag を付けたいならここ（通知が積まれすぎるのが嫌なら）
         // tag: taskId != null ? `reminder-${taskId}` : "reminder",
     };
@@ -92,18 +122,22 @@ self.addEventListener("push", (event) => {
 self.addEventListener("notificationclick", (event) => {
     event.notification.close();
 
-    const data = event.notification?.data || {};
-    const origin = self.location.origin;
+    const data =
+        event.notification?.data && typeof event.notification.data === "object"
+            ? event.notification.data
+            : {};
 
+    const origin = self.location.origin;
     const taskId = pickTaskId(data);
 
     const fallbackPath = buildFallbackPath(taskId);
-    const url =
+
+    const rawUrl =
         typeof data.url === "string" && data.url.length > 0
             ? data.url
             : fallbackPath;
 
-    const openUrl = toAbsoluteUrl(origin, url);
+    const openUrl = toSameOriginUrl(origin, rawUrl, fallbackPath);
 
     event.waitUntil(
         (async () => {
@@ -132,25 +166,15 @@ self.addEventListener("notificationclick", (event) => {
                     });
                 } catch (e) {}
 
-                // ★ここが修正点：
-                // 既に /today を開いているなら URL をいじらない（SPA側のreplaceと競合して二段階になる）
-                const alreadyToday =
-                    typeof target.url === "string"
-                        ? isTodayPageUrl(origin, target.url)
-                        : false;
-                if (alreadyToday) {
-                    return;
-                }
+                // 3) すでに /today のタブなら navigate しない（URL二段階化防止）
+                if (isTodayPageUrl(origin, target.url)) return;
 
-                // 3) /today以外を見ている場合だけ、取りこぼし保険で navigate
-                //    （postMessageを取り逃しても、/today?from=push が拾える）
+                // 4) navigate できるなら /today に寄せる（postMessage取り逃し保険）
                 try {
-                    if (typeof target.navigate === "function") {
-                        await target.navigate(openUrl);
-                    }
+                    await target.navigate(openUrl);
                 } catch (e) {}
 
-                // 4) navigate 後にもう一回 postMessage（確度上げ）
+                // 5) navigate 後にもう一回 postMessage（確度上げ）
                 try {
                     target.postMessage({
                         type: "REMINDER_CLICK",
@@ -161,7 +185,7 @@ self.addEventListener("notificationclick", (event) => {
                 return;
             }
 
-            // タブがなければ開く（URLで拾えるように openUrl のまま）
+            // タブがなければ openWindow
             await self.clients.openWindow(openUrl);
         })(),
     );

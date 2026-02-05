@@ -2,7 +2,7 @@
 
 /**
  * Push受信SW（運用寄り）
- * - 通知表示（payloadを落とさず notification.data に保持）
+ * - 通知表示（notification.data は最小限のホワイトリストだけ保持）
  * - 通知クリック:
  *    - 既存タブがあれば focus
  *      - postMessage({type:'REMINDER_CLICK', payload}) を送る
@@ -10,7 +10,9 @@
  *      - /today 以外の画面なら保険で /today?from=push&task_id=... へ navigate（可能なら）
  *    - タブが無ければ /today?from=push&task_id=... を openWindow
  *
- * 重要: data を削らずに通す（task_id / habit_time_id / date / evaluation_type など）
+ * 重要:
+ * - 「通知クリックで必ず /today に寄せる」ため、payload.url / data.url はナビゲーションに使わない
+ *   （/today?week=... などで週UIが残る事故を防ぐ）
  */
 
 self.addEventListener("install", () => {
@@ -59,6 +61,10 @@ function normalizePayload(input) {
     return {};
 }
 
+/**
+ * notification.data を最小限にホワイトリスト化
+ * - url は「常に /today?from=push...」の openUrl を格納（payload.url は格納しない）
+ */
 function sanitizeNotificationData(payload, openUrl, taskId) {
     return {
         title: payload.title ?? "Habit Tracker",
@@ -101,16 +107,13 @@ self.addEventListener("push", (event) => {
     const origin = self.location.origin;
     const fallbackPath = buildFallbackPath(taskId);
 
-    const rawUrl =
-        typeof payload.url === "string" && payload.url.length > 0
-            ? payload.url
-            : fallbackPath;
-
-    const openUrl = toSameOriginUrl(origin, rawUrl, fallbackPath);
+    // ★重要: 通知クリックの遷移先は常に fallbackPath（/today?from=push...）に固定
+    // payload.url はナビゲーションには使わない（/today?week=... で週UIが残る事故を防ぐ）
+    const openUrl = toSameOriginUrl(origin, fallbackPath, fallbackPath);
 
     const options = {
         body,
-        // ★通知データは必要最小限に限定（トークン混入を防止）
+        // ★通知データは必要最小限に限定（トークン混入・任意URL混入を防止）
         data: sanitizeNotificationData(payload, openUrl, taskId),
         // tag を付けたいならここ（通知が積まれすぎるのが嫌なら）
         // tag: taskId != null ? `reminder-${taskId}` : "reminder",
@@ -129,15 +132,10 @@ self.addEventListener("notificationclick", (event) => {
 
     const origin = self.location.origin;
     const taskId = pickTaskId(data);
-
     const fallbackPath = buildFallbackPath(taskId);
 
-    const rawUrl =
-        typeof data.url === "string" && data.url.length > 0
-            ? data.url
-            : fallbackPath;
-
-    const openUrl = toSameOriginUrl(origin, rawUrl, fallbackPath);
+    // ★重要: data.url も信用しない。常に /today?from=push... に固定
+    const openUrl = toSameOriginUrl(origin, fallbackPath, fallbackPath);
 
     event.waitUntil(
         (async () => {

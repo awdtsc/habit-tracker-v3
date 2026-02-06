@@ -2,7 +2,7 @@
 
 /**
  * Push受信SW（運用寄り）
- * - 通知表示（notification.data は最小限のホワイトリストだけ保持）
+ * - 通知表示（notification.data は最小限のホワイトリストだけ保持 + 文字列上限で安全弁）
  * - 通知クリック:
  *    - 既存タブがあれば focus
  *      - ★既に /today を開いているタブがあれば、そのタブにだけ postMessage（最速UI起動）
@@ -14,6 +14,7 @@
  * 重要:
  * - 「通知クリックで必ず /today に寄せる」ため、payload.url / data.url はナビゲーションに使わない
  *   （/today?week=... などで週UIが残る事故を防ぐ）
+ * - payload の title/body 等が巨大でも落ちないように、notification.data の文字列は上限で切る（運用安全弁）
  */
 
 self.addEventListener("install", () => {
@@ -23,6 +24,28 @@ self.addEventListener("install", () => {
 self.addEventListener("activate", (event) => {
     event.waitUntil(self.clients.claim());
 });
+
+// ===== size guard (運用安全弁) =====
+// ※好みで調整OK（titleは短め、bodyは少し長め）
+const LIMITS = {
+    title: 80,
+    body: 500,
+    date: 64,
+    evaluation_type: 64,
+};
+
+function clampStr(v, maxLen) {
+    const s = typeof v === "string" ? v : String(v ?? "");
+    if (!maxLen || maxLen <= 0) return s;
+    if (s.length <= maxLen) return s;
+    return s.slice(0, maxLen);
+}
+
+function toStrOrNull(v) {
+    if (v == null) return null;
+    const s = String(v);
+    return s ? s : null;
+}
 
 function pickTaskId(obj) {
     return obj?.task_id ?? obj?.taskId ?? obj?.task?.id ?? obj?.task ?? null;
@@ -65,15 +88,18 @@ function normalizePayload(input) {
 /**
  * notification.data を最小限にホワイトリスト化
  * - url は「常に /today?from=push...」の openUrl を格納（payload.url は格納しない）
+ * - 文字列は上限で切って、異常サイズでも落ちないようにする
  */
 function sanitizeNotificationData(payload, openUrl, taskId) {
     return {
-        title: payload.title ?? "Habit Tracker",
-        body: payload.body ?? "",
+        title: clampStr(payload.title ?? "Habit Tracker", LIMITS.title),
+        body: clampStr(payload.body ?? "", LIMITS.body),
         task_id: taskId,
         habit_time_id: payload.habit_time_id ?? null,
-        date: payload.date ?? null,
-        evaluation_type: payload.evaluation_type ?? null,
+        date: toStrOrNull(clampStr(payload.date ?? "", LIMITS.date)),
+        evaluation_type: toStrOrNull(
+            clampStr(payload.evaluation_type ?? "", LIMITS.evaluation_type),
+        ),
         url: openUrl,
     };
 }
@@ -91,6 +117,7 @@ function isTodayPageUrl(origin, clientUrl) {
 /**
  * Push: json() を試して、失敗したら text() fallback（★必ず await）
  * - Promise 混入を防ぎ、options.body を常に string に寄せる
+ * - さらに options.data の文字列も上限で切って、異常サイズでの事故を抑止
  */
 self.addEventListener("push", (event) => {
     event.waitUntil(
@@ -114,11 +141,14 @@ self.addEventListener("push", (event) => {
 
             payload = normalizePayload(payload);
 
-            const title = payload.title || "Habit Tracker";
-            const body =
+            const rawTitle = payload.title || "Habit Tracker";
+            const title = clampStr(rawTitle, LIMITS.title);
+
+            const rawBody =
                 typeof payload.body === "string"
                     ? payload.body
                     : String(payload.body ?? "");
+            const body = clampStr(rawBody, LIMITS.body);
 
             const taskId = pickTaskId(payload);
             const origin = self.location.origin;
@@ -131,7 +161,11 @@ self.addEventListener("push", (event) => {
             const options = {
                 body,
                 // ★通知データは必要最小限に限定（トークン混入・任意URL混入を防止）
-                data: sanitizeNotificationData(payload, openUrl, taskId),
+                data: sanitizeNotificationData(
+                    { ...payload, title, body },
+                    openUrl,
+                    taskId,
+                ),
                 // tag を付けたいならここ（通知が積まれすぎるのが嫌なら）
                 // tag: taskId != null ? `reminder-${taskId}` : "reminder",
             };
@@ -180,6 +214,7 @@ self.addEventListener("notificationclick", (event) => {
                 } catch (_) {}
 
                 // ★/today がある場合のみ message（1回だけ）
+                // data は notification.data（ホワイトリスト + 上限済み）なのでそのまま送って良い
                 try {
                     todayClient.postMessage({
                         type: "REMINDER_CLICK",

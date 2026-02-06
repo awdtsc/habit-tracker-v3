@@ -192,6 +192,32 @@ async function ensureCsrfCookie() {
   if (!r.ok) throw new Error("csrf-cookie failed: " + r.status);
 }
 
+function parseErrorMessage(status, text, ct) {
+  const head = String(text ?? "").slice(0, 200);
+
+  // 401/419は「ログイン切れ」系の可能性が高いので、専用メッセージを出す
+  if (status === 401) {
+    return "未ログインの可能性があります。ログインし直してからもう一度お試しください。";
+  }
+  if (status === 419) {
+    return "セッション期限切れの可能性があります。ページを再読み込みしてからもう一度お試しください。";
+  }
+
+  if (ct && ct.includes("application/json")) {
+    try {
+      const j = JSON.parse(text || "{}");
+      const msg =
+        j?.message ||
+        j?.error ||
+        j?.errors?.message ||
+        null;
+      if (typeof msg === "string" && msg) return msg;
+    } catch (_) {}
+  }
+
+  return `${status} ${head}`;
+}
+
 async function postJson(url, bodyObj = null) {
   const xsrf = getCookie("XSRF-TOKEN");
   const headers = {
@@ -210,10 +236,14 @@ async function postJson(url, bodyObj = null) {
 
   const text = await res.text();
   const ct = res.headers.get("content-type") || "";
-  if (!res.ok) throw new Error(`${res.status} ${text.slice(0, 200)}`);
-  if (!ct.includes("application/json"))
+
+  if (!res.ok) {
+    throw new Error(parseErrorMessage(res.status, text, ct));
+  }
+  if (!ct.includes("application/json")) {
     throw new Error(`unexpected content-type: ${ct}`);
-  return JSON.parse(text);
+  }
+  return JSON.parse(text || "{}");
 }
 
 /**

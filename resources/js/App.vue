@@ -32,6 +32,8 @@ const route = useRoute();
 const router = useRouter();
 
 const keepAliveNames = ["TodayPage", "WeeklyPage"];
+const recentReminderOpenKeys = new Map();
+const REMINDER_OPEN_DEDUPE_MS = 3000;
 
 // プリフェッチ対象（反対側のページを先読み）
 const prefetchWeek = () => import("@/Pages/Weekly.vue");
@@ -81,26 +83,60 @@ function normalizePayload(input) {
   };
 }
 
+function buildReminderEventKey(payload) {
+  const p = payload && typeof payload === "object" ? payload : {};
+  const task = p.task_id ?? "none";
+  const habitTime = p.habit_time_id ?? "none";
+  const date = p.date ?? "none";
+  const evalType = p.evaluation_type ?? "none";
+  return `${task}|${habitTime}|${date}|${evalType}`;
+}
+
+function shouldOpenReminder(payload) {
+  const now = Date.now();
+
+  for (const [key, ts] of recentReminderOpenKeys.entries()) {
+    if (now - ts > REMINDER_OPEN_DEDUPE_MS) recentReminderOpenKeys.delete(key);
+  }
+
+  const key = buildReminderEventKey(payload);
+  const prev = recentReminderOpenKeys.get(key);
+  if (typeof prev === "number" && now - prev <= REMINDER_OPEN_DEDUPE_MS) {
+    return false;
+  }
+
+  recentReminderOpenKeys.set(key, now);
+  return true;
+}
+
 // ★URLクエリ保険：/today?from=push&task_id=... で開かれたらモーダルを開く
 function openFromQueryIfNeeded() {
+  if (route.path !== "/today") return;
   if (route.query.from !== "push") return;
 
-  const taskId = normalizeTaskId(route.query.task_id ?? null);
+  const payload = normalizePayload({
+    title: "Habit Reminder",
+    body: "",
+    task_id: route.query.task_id ?? null,
+    habit_time_id: route.query.habit_time_id ?? null,
+    date: route.query.date ?? null,
+    evaluation_type: route.query.evaluation_type ?? null,
+    time_slot: route.query.time_slot ?? null,
+    url: route.fullPath,
+  });
 
-  openReminderModal(
-    normalizePayload({
-      title: "Habit Reminder",
-      body: "",
-      task_id: taskId,
-      // SW 側は常に /today?from=push... に寄せる想定なので、ここも同じ方針で OK
-      url: route.fullPath,
-    }),
-  );
+  if (shouldOpenReminder(payload)) {
+    openReminderModal(payload);
+  }
 
   // 連続発火防止：クエリ掃除（描画と競合させない）
   const q = { ...route.query };
   delete q.from;
   delete q.task_id;
+  delete q.habit_time_id;
+  delete q.date;
+  delete q.evaluation_type;
+  delete q.time_slot;
   setTimeout(() => router.replace({ query: q }).catch(() => {}), 0);
 }
 
@@ -110,7 +146,9 @@ function onSwMessage(event) {
   if (data?.type !== "REMINDER_CLICK") return;
 
   // SW→postMessage payload をここで正規化して事故率を下げる
-  openReminderModal(normalizePayload(data.payload));
+  const payload = normalizePayload(data.payload);
+  if (!shouldOpenReminder(payload)) return;
+  openReminderModal(payload);
 }
 
 onMounted(() => {

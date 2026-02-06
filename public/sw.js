@@ -1,7 +1,7 @@
 /* public/sw.js */
 
 /**
- * Push受信SW（運用寄り）
+ * Push受信SW運用寄り）
  * - 通知表示（notification.data は最小限のホワイトリストだけ保持 + 文字列上限で安全弁）
  * - 通知クリック:
  *    - 既存タブがあれば focus
@@ -96,6 +96,8 @@ function sanitizeNotificationData(payload, openUrl, taskId) {
         body: clampStr(payload.body ?? "", LIMITS.body),
         task_id: taskId,
         habit_time_id: payload.habit_time_id ?? null,
+        habit_id: payload.habit_id ?? null,
+        time_slot: payload.time_slot ?? null,
         date: toStrOrNull(clampStr(payload.date ?? "", LIMITS.date)),
         evaluation_type: toStrOrNull(
             clampStr(payload.evaluation_type ?? "", LIMITS.evaluation_type),
@@ -218,6 +220,7 @@ self.addEventListener("notificationclick", (event) => {
                 try {
                     todayClient.postMessage({
                         type: "REMINDER_CLICK",
+                        source: "notificationclick",
                         payload: data,
                     });
                 } catch (_) {}
@@ -270,6 +273,7 @@ self.addEventListener("notificationclick", (event) => {
                     try {
                         refreshedToday.postMessage({
                             type: "REMINDER_CLICK",
+                            source: "notificationclick",
                             payload: data,
                         });
                     } catch (_) {}

@@ -5,10 +5,10 @@
  * - 通知表示（notification.data は最小限のホワイトリストだけ保持）
  * - 通知クリック:
  *    - 既存タブがあれば focus
- *      - postMessage({type:'REMINDER_CLICK', payload}) を送る
- *      - ★既に /today を開いているタブなら navigate しない（URL二段階化防止）
- *      - /today 以外の画面なら保険で /today?from=push&task_id=... へ navigate（可能なら）
+ *      - ★既に /today を開いているタブがあれば、そのタブにだけ postMessage（最速UI起動）
+ *      - /today タブが無ければ /today?from=push&task_id=... へ navigate（可能なら）
  *      - ★navigate が失敗した場合は openWindow で救済（到達保証を上げる）
+ *      - ★openWindow 前に /today タブ再確認してタブ増殖を抑止
  *    - タブが無ければ /today?from=push&task_id=... を openWindow
  *
  * 重要:
@@ -159,63 +159,92 @@ self.addEventListener("notificationclick", (event) => {
             // ★重要: data.url も信用しない。常に /today?from=push... に固定
             const openUrl = toSameOriginUrl(origin, fallbackPath, fallbackPath);
 
+            // 初回のクライアント探索
             const clientList = await self.clients.matchAll({
                 type: "window",
                 includeUncontrolled: true,
             });
 
-            // 同一originを優先
-            const sameOrigin = clientList.find(
+            const sameOriginClients = clientList.filter(
                 (c) => typeof c.url === "string" && c.url.startsWith(origin),
             );
-            const target = sameOrigin || clientList[0];
 
-            if (!target) {
-                // タブがなければ openWindow
-                await self.clients.openWindow(openUrl);
+            // ★最優先: 既に /today を開いているタブがあるなら、それだけを使う
+            const todayClient = sameOriginClients.find((c) =>
+                isTodayPageUrl(origin, c.url),
+            );
+
+            if (todayClient) {
+                try {
+                    await todayClient.focus();
+                } catch (_) {}
+
+                // ★/today がある場合のみ message（1回だけ）
+                try {
+                    todayClient.postMessage({
+                        type: "REMINDER_CLICK",
+                        payload: data,
+                    });
+                } catch (_) {}
+
                 return;
             }
 
-            // 1) まずフォーカス
-            try {
-                await target.focus();
-            } catch (_) {}
+            // ★/today が無い場合:
+            // - message は送らない（/today以外で開いても二重トリガー/未ログイン/画面不一致が起きやすい）
+            // - /today?from=push... に寄せる（navigate → openWindow救済）
+            const target = sameOriginClients[0] || clientList[0];
 
-            // 2) postMessage（最速でモーダルを開ける）
-            try {
-                target.postMessage({
-                    type: "REMINDER_CLICK",
-                    payload: data,
-                });
-            } catch (_) {}
-
-            // 3) すでに /today のタブなら navigate しない（URL二段階化防止）
-            if (isTodayPageUrl(origin, target.url)) return;
-
-            // 4) navigate できるなら /today に寄せる（postMessage取り逃し保険）
-            //    ★失敗したら openWindow で救済して到達保証を上げる
-            let navigated = false;
-            try {
-                await target.navigate(openUrl);
-                navigated = true;
-            } catch (_) {
-                navigated = false;
-            }
-
-            // 5) navigate 後にもう一回 postMessage（確度上げ）
-            try {
-                target.postMessage({
-                    type: "REMINDER_CLICK",
-                    payload: data,
-                });
-            } catch (_) {}
-
-            // ★救済: navigate が失敗した場合は openWindow で /today コンテキストを必ず作る
-            if (!navigated) {
+            if (target) {
                 try {
-                    await self.clients.openWindow(openUrl);
+                    await target.focus();
                 } catch (_) {}
+
+                let navigated = false;
+                try {
+                    await target.navigate(openUrl);
+                    navigated = true;
+                } catch (_) {
+                    navigated = false;
+                }
+
+                if (navigated) return;
             }
+
+            // navigate が失敗した場合の救済:
+            // ★タブ増殖抑止のため、openWindow 前にもう一度 /today が生えたか再確認
+            try {
+                const refreshed = await self.clients.matchAll({
+                    type: "window",
+                    includeUncontrolled: true,
+                });
+
+                const refreshedSameOrigin = refreshed.filter(
+                    (c) =>
+                        typeof c.url === "string" && c.url.startsWith(origin),
+                );
+
+                const refreshedToday = refreshedSameOrigin.find((c) =>
+                    isTodayPageUrl(origin, c.url),
+                );
+
+                if (refreshedToday) {
+                    try {
+                        await refreshedToday.focus();
+                    } catch (_) {}
+                    try {
+                        refreshedToday.postMessage({
+                            type: "REMINDER_CLICK",
+                            payload: data,
+                        });
+                    } catch (_) {}
+                    return;
+                }
+            } catch (_) {}
+
+            try {
+                await self.clients.openWindow(openUrl);
+            } catch (_) {}
         })(),
     );
 });

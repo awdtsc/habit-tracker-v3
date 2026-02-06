@@ -49,18 +49,53 @@ function prefetchOpposite(name) {
   if (name === "week" || name === "WeeklyPage") schedulePrefetch(prefetchToday);
 }
 
+/**
+ * task_id を数値にできるなら数値で、無理なら文字列で保持
+ * - 0 は不正扱いに寄せる（Number("0") は 0 なので弾く）
+ */
+function normalizeTaskId(v) {
+  if (v == null) return null;
+
+  const s = String(v).trim();
+  if (!s) return null;
+
+  const n = Number(s);
+  if (Number.isFinite(n) && n > 0) return n;
+
+  // 数値化できないが何かしら値がある場合は文字列として保持
+  return s;
+}
+
+function normalizePayload(input) {
+  const p =
+    input && typeof input === "object" && !Array.isArray(input) ? input : {};
+
+  return {
+    title: typeof p.title === "string" && p.title ? p.title : "Habit Reminder",
+    body: typeof p.body === "string" ? p.body : String(p.body ?? ""),
+    task_id: normalizeTaskId(p.task_id ?? p.taskId ?? p.task?.id ?? p.task ?? null),
+    habit_time_id: p.habit_time_id ?? null,
+    date: p.date ?? null,
+    evaluation_type: p.evaluation_type ?? null,
+    url: typeof p.url === "string" ? p.url : null,
+  };
+}
+
 // ★URLクエリ保険：/today?from=push&task_id=... で開かれたらモーダルを開く
 function openFromQueryIfNeeded() {
   if (route.query.from !== "push") return;
 
-  const taskId = route.query.task_id ?? null;
+  const taskId = normalizeTaskId(route.query.task_id ?? null);
 
-  openReminderModal({
-    title: "Habit Reminder",
-    body: "",
-    task_id: taskId != null ? Number(taskId) || String(taskId) : null,
-    url: route.fullPath,
-  });
+  openReminderModal(
+    normalizePayload({
+      title: "Habit Reminder",
+      body: "",
+      task_id: taskId,
+      // SW 側は常に /today?from=push... に寄せる想定なので、ここも同じ方針で OK
+      url: route.fullPath,
+    }),
+  );
 
   // 連続発火防止：クエリ掃除（描画と競合させない）
   const q = { ...route.query };
@@ -72,9 +107,10 @@ function openFromQueryIfNeeded() {
 // ★SW message handler（removeできるように関数化）
 function onSwMessage(event) {
   const data = event?.data;
-  if (data?.type === "REMINDER_CLICK") {
-    openReminderModal(data.payload ?? null);
-  }
+  if (data?.type !== "REMINDER_CLICK") return;
+
+  // SW→postMessage payload をここで正規化して事故率を下げる
+  openReminderModal(normalizePayload(data.payload));
 }
 
 onMounted(() => {
@@ -98,8 +134,14 @@ onUnmounted(() => {
   }
 });
 
-watch(() => route.name, (name) => prefetchOpposite(name));
+watch(
+  () => route.name,
+  (name) => prefetchOpposite(name),
+);
 
 // ルート変更時にも push クエリを拾う（openWindowで遷移したケース）
-watch(() => route.fullPath, () => openFromQueryIfNeeded());
+watch(
+  () => route.fullPath,
+  () => openFromQueryIfNeeded(),
+);
 </script>

@@ -3,7 +3,8 @@
   <div class="p-6 space-y-4">
     <h1 class="text-xl font-bold">通知設定</h1>
 
-    <div class="card space-y-2">
+    <!-- Status -->
+    <div class="rounded-xl border border-gray-200 bg-white p-4 space-y-2">
       <div>Notification.permission: <b>{{ permission }}</b></div>
       <div>ServiceWorker: <b>{{ swScope || "(none)" }}</b></div>
       <div>Subscription: <b>{{ hasSub ? "yes" : "no" }}</b></div>
@@ -11,28 +12,60 @@
       <div>Login (api/v1/auth/me): <b>{{ authOk ? "ok" : "unknown/unauth" }}</b></div>
     </div>
 
-    <div class="flex gap-2 flex-wrap">
-      <button class="btn" @click="doSubscribe">購読する</button>
-      <button class="btn" @click="doUnsubscribe" :disabled="!hasSub">購読解除</button>
-      <button class="btn" @click="doTest" :disabled="!hasSub">テスト送信</button>
-      <button class="btn" @click="refreshState">再読み込み</button>
+    <!-- Actions -->
+    <div class="flex flex-wrap gap-2">
+      <button
+        class="inline-flex items-center justify-center rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm font-medium hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+        @click="doSubscribe"
+        :disabled="busy"
+      >
+        購読する
+      </button>
+
+      <button
+        class="inline-flex items-center justify-center rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm font-medium hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+        @click="doUnsubscribe"
+        :disabled="!hasSub || busy"
+      >
+        購読解除
+      </button>
+
+      <button
+        class="inline-flex items-center justify-center rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm font-medium hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+        @click="doTest"
+        :disabled="!hasSub || busy"
+      >
+        テスト送信
+      </button>
+
+      <button
+        class="inline-flex items-center justify-center rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm font-medium hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+        @click="refreshState"
+        :disabled="busy"
+      >
+        再読み込み
+      </button>
     </div>
 
-    <div class="card space-y-2">
+    <!-- Help -->
+    <div class="rounded-xl border border-gray-200 bg-white p-4 space-y-2">
       <div class="text-sm text-gray-600">
         使い方:
-        <ol class="list-decimal ml-5">
+        <ol class="list-decimal ml-5 mt-1 space-y-1">
           <li>「購読する」→ブラウザ通知を許可</li>
           <li>成功するとDBにsubscriptionが保存され、/api/v1/push/test が通るようになります</li>
         </ol>
       </div>
-      <div class="text-xs text-gray-500">
+      <div class="text-xs text-gray-500 leading-relaxed">
         ※ 419(Page Expired) が出る場合は CSRF cookie が未取得です。ここでは自動で /sanctum/csrf-cookie を取得します。<br />
         ※ 401 が出る場合は未ログインです（/today 等でログインしてから戻ってきてください）。
       </div>
     </div>
 
-    <pre class="log">{{ logs.join("\n") }}</pre>
+    <!-- Logs -->
+    <pre
+      class="rounded-xl bg-gray-50 p-4 text-xs leading-relaxed whitespace-pre-wrap overflow-auto border border-gray-200"
+    >{{ logs.join("\n") }}</pre>
   </div>
 </template>
 
@@ -44,6 +77,7 @@ const swScope = ref("");
 const hasSub = ref(false);
 const vapidOk = ref(false);
 const authOk = ref(false);
+const busy = ref(false);
 const logs = ref([]);
 
 function log(...a) {
@@ -61,7 +95,6 @@ function getCookie(name) {
     ?.split("=")[1];
 }
 
-// VAPID key: base64url -> Uint8Array
 function urlBase64ToUint8Array(base64String) {
   const padding = "=".repeat((4 - (base64String.length % 4)) % 4);
   const base64 = (base64String + padding).replace(/-/g, "+").replace(/_/g, "/");
@@ -87,7 +120,6 @@ async function ensurePermission() {
 }
 
 async function ensureCsrfCookie() {
-  // 419回避：Cookieモードのときはここで必ず取る
   const res = await fetch("/sanctum/csrf-cookie", { credentials: "same-origin" });
   log("[csrf-cookie]", res.status);
   if (!res.ok) throw new Error("csrf-cookie failed: " + res.status);
@@ -99,14 +131,12 @@ async function fetchJson(url, init) {
   const ct = res.headers.get("content-type") || "";
   if (!res.ok) throw new Error(`${url} failed: ${res.status} ${text.slice(0, 300)}`);
   if (!ct.includes("application/json")) {
-    // HTMLなどが返るときのデバッグ
     throw new Error(`${url} unexpected content-type: ${ct} body=${text.slice(0, 200)}`);
   }
   return JSON.parse(text);
 }
 
 async function apiGetMe() {
-  // auth確認（401なら未ログイン）
   const xsrf = getCookie("XSRF-TOKEN");
   const headers = {
     Accept: "application/json",
@@ -126,7 +156,6 @@ async function apiGetMe() {
 async function refreshState() {
   try {
     permission.value = typeof Notification !== "undefined" ? Notification.permission : "unsupported";
-
     vapidOk.value = !!import.meta.env.VITE_VAPID_PUBLIC_KEY;
 
     if (!("serviceWorker" in navigator)) {
@@ -171,7 +200,10 @@ async function postJson(url, bodyObj) {
 }
 
 async function doSubscribe() {
+  if (busy.value) return;
+  busy.value = true;
   logs.value = [];
+
   try {
     const key = import.meta.env.VITE_VAPID_PUBLIC_KEY;
     vapidOk.value = !!key;
@@ -193,18 +225,22 @@ async function doSubscribe() {
 
     log("[ok] subscribed in browser");
 
-    // サーバ登録（あなたの routes/api.php に合わせる）
     const api = await postJson("/api/v1/push/subscribe", sub.toJSON());
     log("[ok] subscribed in server", api);
 
     await refreshState();
   } catch (e) {
     log("[subscribe error]", String(e?.message ?? e));
+  } finally {
+    busy.value = false;
   }
 }
 
 async function doUnsubscribe() {
+  if (busy.value) return;
+  busy.value = true;
   logs.value = [];
+
   try {
     const regs = await navigator.serviceWorker.getRegistrations();
     const reg = regs[0];
@@ -213,23 +249,34 @@ async function doUnsubscribe() {
     const sub = await reg.pushManager.getSubscription();
     if (!sub) throw new Error("no subscription");
 
+    await ensureCsrfCookie();
+    await apiGetMe();
+    if (!authOk.value) throw new Error("Not authenticated. Please login first.");
+
+    await postJson("/api/v1/push/unsubscribe", { endpoint: sub.endpoint });
+    log("[ok] unsubscribed in server");
+
     await sub.unsubscribe();
     log("[ok] unsubscribed in browser");
 
     await refreshState();
   } catch (e) {
     log("[unsubscribe error]", String(e?.message ?? e));
+  } finally {
+    busy.value = false;
   }
 }
 
 async function doTest() {
+  if (busy.value) return;
+  busy.value = true;
   logs.value = [];
+
   try {
     await ensureCsrfCookie();
     await apiGetMe();
     if (!authOk.value) throw new Error("Not authenticated. Please login first.");
 
-    // /api/v1/push/test が期待するpayloadに合わせる（最低限）
     const res = await postJson("/api/v1/push/test", {
       title: "Habit Tracker",
       body: "test push",
@@ -238,8 +285,11 @@ async function doTest() {
     });
 
     log("[ok] test sent", res);
+    await refreshState();
   } catch (e) {
     log("[test error]", String(e?.message ?? e));
+  } finally {
+    busy.value = false;
   }
 }
 
@@ -247,30 +297,3 @@ onMounted(async () => {
   await refreshState();
 });
 </script>
-
-<style scoped>
-.card {
-  border: 1px solid #e5e7eb;
-  border-radius: 12px;
-  padding: 12px;
-  background: #fff;
-}
-.btn {
-  padding: 8px 12px;
-  border: 1px solid #d1d5db;
-  border-radius: 10px;
-  background: #fff;
-  cursor: pointer;
-}
-.btn:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-.log {
-  background: #f6f6f6;
-  padding: 12px;
-  border-radius: 10px;
-  white-space: pre-wrap;
-  overflow: auto;
-}
-</style>

@@ -14,13 +14,6 @@ class PushSubscriptionController extends Controller
 {
     /**
      * POST /api/v1/push/subscribe
-     *
-     * body:
-     * {
-     *   endpoint: "...",
-     *   keys: { p256dh: "...", auth: "..." },
-     *   contentEncoding: "aesgcm" | "aes128gcm" (optional)
-     * }
      */
     public function subscribe(Request $request)
     {
@@ -30,10 +23,10 @@ class PushSubscriptionController extends Controller
         }
 
         $v = Validator::make($request->all(), [
-            'endpoint' => ['required', 'string'],
+            'endpoint' => ['required', 'string', 'max:500'],
             'keys' => ['required', 'array'],
-            'keys.p256dh' => ['required', 'string'],
-            'keys.auth' => ['required', 'string'],
+            'keys.p256dh' => ['required', 'string', 'max:255'],
+            'keys.auth' => ['required', 'string', 'max:255'],
             'contentEncoding' => ['nullable', 'string', 'in:aesgcm,aes128gcm'],
             'content_encoding' => ['nullable', 'string', 'in:aesgcm,aes128gcm'], // 互換
         ]);
@@ -45,7 +38,13 @@ class PushSubscriptionController extends Controller
             ], 422);
         }
 
-        $sub = PushSubscription::upsertFromWebPush($userId, $request->all());
+        // ★必要最小限だけ渡す（巨大payload混入/想定外キーを遮断）
+        $sub = PushSubscription::upsertFromWebPush($userId, $request->only([
+            'endpoint',
+            'keys',
+            'contentEncoding',
+            'content_encoding',
+        ]));
 
         // ✅ 同一ユーザー & 同一User-Agent の “古い購読” は掃除（同一端末の更新で二重通知を防ぐ）
         if (!empty($sub->user_agent)) {
@@ -59,6 +58,42 @@ class PushSubscriptionController extends Controller
         return response()->json([
             'ok' => true,
             'id' => $sub->id,
+        ]);
+    }
+
+    /**
+     * POST /api/v1/push/unsubscribe
+     * body: { endpoint: "..." }
+     */
+    public function unsubscribe(Request $request)
+    {
+        $userId = Auth::id();
+        if (!$userId) {
+            return response()->json(['message' => 'Unauthenticated.'], 401);
+        }
+
+        $v = Validator::make($request->all(), [
+            'endpoint' => ['required', 'string', 'max:500'],
+        ]);
+
+        if ($v->fails()) {
+            return response()->json([
+                'message' => 'Validation failed',
+                'errors' => $v->errors(),
+            ], 422);
+        }
+
+        $endpoint = trim((string) $request->input('endpoint'));
+        $endpointHash = strtoupper(hash('sha256', $endpoint));
+
+        $deleted = PushSubscription::query()
+            ->where('user_id', $userId)
+            ->where('endpoint_hash', $endpointHash)
+            ->delete();
+
+        return response()->json([
+            'ok' => true,
+            'deleted' => (int) $deleted,
         ]);
     }
 
@@ -78,13 +113,16 @@ class PushSubscriptionController extends Controller
             return response()->json(['message' => 'Disabled in production'], 403);
         }
 
-        $title = (string)($request->input('title', 'Habit Tracker'));
-        $body  = (string)($request->input('body',  'テスト通知です'));
-        $url   = (string)($request->input('url',   '/'));
+        $title = (string) $request->input('title', 'Habit Tracker');
+        $body = (string) $request->input('body', 'テスト通知です');
+        $url = (string) $request->input('url', '/');
 
+        // ★「最新の購読」から送る優先度（last_seen_at → id）
         $subs = PushSubscription::query()
             ->where('user_id', $userId)
             ->whereNotNull('endpoint_hash')
+            ->orderByDesc('last_seen_at')
+            ->orderByDesc('id')
             ->get();
 
         if ($subs->isEmpty()) {
@@ -95,8 +133,8 @@ class PushSubscriptionController extends Controller
 
         $payload = json_encode([
             'title' => $title,
-            'body'  => $body,
-            'url'   => $url,
+            'body' => $body,
+            'url' => $url,
         ], JSON_UNESCAPED_UNICODE);
 
         foreach ($subs as $s) {
@@ -107,22 +145,46 @@ class PushSubscriptionController extends Controller
                 'contentEncoding' => $s->content_encoding ?: 'aesgcm',
             ]);
 
-            $webpush->queueNotification($subscription, $payload);
+            // TTL は短め（テスト用途）
+            $webpush->queueNotification($subscription, $payload, ['TTL' => 600]);
         }
 
         $sent = 0;
         $failed = 0;
+        $removed = 0;
         $errors = [];
 
         foreach ($webpush->flush() as $report) {
             if ($report->isSuccess()) {
                 $sent++;
-            } else {
-                $failed++;
-                $errors[] = [
-                    'endpoint' => $report->getRequest()?->getUri()?->__toString(),
-                    'reason'   => $report->getReason(),
-                ];
+                continue;
+            }
+
+            $failed++;
+
+            // Report から endpoint/status をできる限り拾う（実装差を吸収）
+            $endpoint = method_exists($report, 'getEndpoint') ? $report->getEndpoint() : null;
+
+            $statusCode = null;
+            if (method_exists($report, 'getResponse')) {
+                $response = $report->getResponse();
+                if ($response && method_exists($response, 'getStatusCode')) {
+                    $statusCode = $response->getStatusCode();
+                }
+            }
+
+            $errors[] = [
+                'endpoint_hash' => $endpoint ? strtoupper(hash('sha256', (string) $endpoint)) : null,
+                'status' => $statusCode,
+                'reason' => mb_strimwidth((string) $report->getReason(), 0, 200, '…', 'UTF-8'),
+            ];
+
+            // 404/410 は無効購読として掃除（subscription garbage pile 防止）
+            if ($endpoint && ($statusCode === 404 || $statusCode === 410)) {
+                $removed += (int) PushSubscription::query()
+                    ->where('user_id', $userId)
+                    ->where('endpoint_hash', strtoupper(hash('sha256', (string) $endpoint)))
+                    ->delete();
             }
         }
 
@@ -135,18 +197,20 @@ class PushSubscriptionController extends Controller
             'ok' => true,
             'sent' => $sent,
             'failed' => $failed,
+            'removed' => $removed,
             'errors' => $errors,
         ]);
     }
 
     private function makeWebPush(): WebPush
     {
-        $cfg = config('services.webpush.vapid');
+        // ★ services.webpush.vapid ではなく webpush.vapid に統一（config/webpush.php 想定）
+        $cfg = config('webpush.vapid');
 
         return new WebPush([
             'VAPID' => [
-                'subject'    => $cfg['subject'] ?? null,
-                'publicKey'  => $cfg['public_key'] ?? null,
+                'subject' => $cfg['subject'] ?? null,
+                'publicKey' => $cfg['public_key'] ?? null,
                 'privateKey' => $cfg['private_key'] ?? null,
             ],
         ]);

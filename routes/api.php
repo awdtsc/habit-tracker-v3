@@ -79,7 +79,8 @@ Route::prefix('v1')->group(function () {
         | Push (protected)
         |----------------------------------------------------------------------
         */
-        Route::post('/push/subscribe', [PushSubscriptionController::class, 'subscribe']);
-        Route::post('/push/test', [PushSubscriptionController::class, 'test']);
+        Route::post('/push/subscribe',    [PushSubscriptionController::class, 'subscribe']);
+        Route::post('/push/unsubscribe',  [PushSubscriptionController::class, 'unsubscribe']); // ★追加：DB側も掃除
+        Route::post('/push/test',         [PushSubscriptionController::class, 'test']);
     });
 });

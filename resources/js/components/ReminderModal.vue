@@ -130,6 +130,7 @@
 
 <script setup>
 import { computed, ref, watch, onMounted, onBeforeUnmount, nextTick } from "vue";
+import { emitReminderAction } from "@/state/reminderActionBus";
 
 const props = defineProps({
   open: { type: Boolean, default: false },
@@ -161,8 +162,6 @@ watch(
       okMsg.value = "";
       snoozeMinutes.value = 10;
 
-      // ★DevTools開いてる時に paint が遅れることがあるので、
-      //   DOM反映後に1回だけ reflow を起こして描画を促す
       await nextTick();
       const el = panelRef.value;
       if (el && el.getBoundingClientRect) {
@@ -195,7 +194,6 @@ async function ensureCsrfCookie() {
 function parseErrorMessage(status, text, ct) {
   const head = String(text ?? "").slice(0, 200);
 
-  // 401/419は「ログイン切れ」系の可能性が高いので、専用メッセージを出す
   if (status === 401) {
     return "未ログインの可能性があります。ログインし直してからもう一度お試しください。";
   }
@@ -206,11 +204,7 @@ function parseErrorMessage(status, text, ct) {
   if (ct && ct.includes("application/json")) {
     try {
       const j = JSON.parse(text || "{}");
-      const msg =
-        j?.message ||
-        j?.error ||
-        j?.errors?.message ||
-        null;
+      const msg = j?.message || j?.error || j?.errors?.message || null;
       if (typeof msg === "string" && msg) return msg;
     } catch (_) {}
   }
@@ -247,20 +241,17 @@ async function postJson(url, bodyObj = null) {
 }
 
 /**
- * ★同期用：モーダル操作が成功したら全体に通知
+ * ✅ 同期用：モーダル操作が成功したら bus に通知
+ * - Pages は onReminderAction で購読する
  */
 function emitAction(type, result) {
-  window.dispatchEvent(
-    new CustomEvent("reminder-action", {
-      detail: {
-        type, // 'done' | 'cancel' | 'snooze'
-        task_id: taskId.value,
-        payload: props.payload ?? null,
-        result: result ?? null,
-        at: Date.now(),
-      },
-    })
-  );
+  emitReminderAction({
+    type, // 'done' | 'cancel' | 'snooze'
+    task_id: taskId.value,
+    payload: props.payload ?? null,
+    result: result ?? null,
+    at: Date.now(),
+  });
 }
 
 async function doDone() {

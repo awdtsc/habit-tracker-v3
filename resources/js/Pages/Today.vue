@@ -17,6 +17,7 @@ import { onMounted, onUnmounted, ref } from "vue";
 import AppHeader from "@/components/layout/AppHeader.vue";
 import TodayTab from "@/components/tabs/TodayTab.vue";
 import { prefetchCurrentWeek } from "@/state/weekCache";
+import { onReminderAction } from "@/state/reminderActionBus";
 
 defineOptions({ name: "TodayPage" });
 
@@ -28,22 +29,11 @@ function bumpRefresh() {
 }
 
 function pickActionType(d) {
-  // ★ここで表記ゆれ吸収（どれかに入ってればOK）
+  // ★表記ゆれ吸収（どれかに入ってればOK）
   return d?.type ?? d?.action ?? d?.kind ?? d?.event ?? null;
 }
 
-const handler = (e) => {
-  const d = e?.detail;
-  if (!d) return;
-
-  const t = pickActionType(d);
-
-  // ★方針：done のときだけ同期（ただし type が欠落してる場合は「同期してOK」扱いにする）
-  // - type欠落で同期が死ぬ事故を防ぐ
-  if (t != null && t !== "done") return;
-
-  bumpRefresh();
-};
+let offAction = null;
 
 onMounted(() => {
   let painted = false;
@@ -65,10 +55,21 @@ onMounted(() => {
     }
   });
 
-  window.addEventListener("reminder-action", handler);
+  // ✅ 正：reminderActionBus で同期
+  // 方針：done のときだけ同期（ただし type 欠落は「同期してOK」扱い）
+  offAction = onReminderAction((evt) => {
+    const d = evt ?? null;
+    if (!d) return;
+
+    const t = pickActionType(d);
+    if (t != null && t !== "done") return;
+
+    bumpRefresh();
+  });
 });
 
 onUnmounted(() => {
-  window.removeEventListener("reminder-action", handler);
+  if (typeof offAction === "function") offAction();
+  offAction = null;
 });
 </script>

@@ -8,11 +8,7 @@
       </div>
 
       <!-- ✅ refreshKey で確実に再生成（同期の最終手段） -->
-      <WeekTab
-        v-else
-        :key="refreshKey"
-        :refresh-key="refreshKey"
-      />
+      <WeekTab v-else :key="refreshKey" :refresh-key="refreshKey" />
     </main>
   </div>
 </template>
@@ -21,6 +17,7 @@
 import { onMounted, onUnmounted, ref } from "vue";
 import AppHeader from "@/components/layout/AppHeader.vue";
 import WeekTab from "@/components/tabs/WeekTab.vue";
+import { onReminderAction } from "@/state/reminderActionBus";
 
 defineOptions({ name: "WeeklyPage" });
 
@@ -32,7 +29,7 @@ function bumpRefresh() {
 }
 
 /**
- * reminder-action を受けて WeekTab を同期
+ * ✅ reminderActionBus 経由で WeekTab を同期
  * - 要件: weekタブのときもモーダルで「完了(done)」なら同期
  * - 方針:
  *   - done だけ同期（cancel/snoozeは現状スルー）
@@ -41,8 +38,12 @@ function bumpRefresh() {
 const recent = new Map();
 const DEDUPE_MS = 1500;
 
+function pickActionType(d) {
+  return d?.type ?? d?.action ?? d?.kind ?? d?.event ?? null;
+}
+
 function buildKey(d) {
-  const type = d?.type ?? "unknown";
+  const type = pickActionType(d) ?? "unknown";
   const task = d?.task_id ?? "none";
   const date = d?.payload?.date ?? "none";
   const habitTime = d?.payload?.habit_time_id ?? "none";
@@ -64,15 +65,7 @@ function shouldBump(d) {
   return true;
 }
 
-function onReminderAction(e) {
-  const d = e?.detail;
-  if (!d) return;
-
-  if (d.type !== "done") return;
-  if (!shouldBump(d)) return;
-
-  bumpRefresh();
-}
+let offAction = null;
 
 onMounted(() => {
   let painted = false;
@@ -86,10 +79,19 @@ onMounted(() => {
     if (!painted) ready.value = true;
   }, 80);
 
-  window.addEventListener("reminder-action", onReminderAction);
+  offAction = onReminderAction((evt) => {
+    const d = evt ?? null;
+    if (!d) return;
+
+    if (pickActionType(d) !== "done") return;
+    if (!shouldBump(d)) return;
+
+    bumpRefresh();
+  });
 });
 
 onUnmounted(() => {
-  window.removeEventListener("reminder-action", onReminderAction);
+  if (typeof offAction === "function") offAction();
+  offAction = null;
 });
 </script>

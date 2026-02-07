@@ -27,14 +27,25 @@ function bumpRefresh() {
   refreshKey.value++;
 }
 
+function pickActionType(d) {
+  // ★ここで表記ゆれ吸収（どれかに入ってればOK）
+  return d?.type ?? d?.action ?? d?.kind ?? d?.event ?? null;
+}
+
 const handler = (e) => {
   const d = e?.detail;
   if (!d) return;
+
+  const t = pickActionType(d);
+
+  // ★方針：done のときだけ同期（ただし type が欠落してる場合は「同期してOK」扱いにする）
+  // - type欠落で同期が死ぬ事故を防ぐ
+  if (t != null && t !== "done") return;
+
   bumpRefresh();
 };
 
 onMounted(() => {
-  // ★rAFが止まっても必ず表示されるように fallback を入れる
   let painted = false;
 
   requestAnimationFrame(() => {
@@ -46,7 +57,6 @@ onMounted(() => {
     if (!painted) ready.value = true;
   }, 80);
 
-  // prefetchは“描画の後”へ（競合させない）
   requestAnimationFrame(() => {
     if ("requestIdleCallback" in window) {
       window.requestIdleCallback(() => prefetchCurrentWeek().catch(() => {}), { timeout: 900 });

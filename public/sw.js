@@ -1,20 +1,17 @@
 /* public/sw.js */
 
 /**
- * Push受信SW運用寄り）
+ * Push受信SW（運用寄り / “アプリ内は遷移しない” 方針）
  * - 通知表示（notification.data は最小限のホワイトリストだけ保持 + 文字列上限で安全弁）
  * - 通知クリック:
- *    - 既存タブがあれば focus
- *      - ★既に /today を開いているタブがあれば、そのタブにだけ postMessage（最速UI起動）
- *      - /today タブが無ければ /today?from=push&task_id=... へ navigate（可能なら）
- *      - ★navigate が失敗した場合は openWindow で救済（到達保証を上げる）
- *      - ★openWindow 前に /today タブ再確認してタブ増殖を抑止
- *    - タブが無ければ /today?from=push&task_id=... を openWindow
+ *    - ★既存タブがあれば「/today限定にせず」そのタブを focus して postMessage（REMINDER_CLICK）
+ *      - つまり week / settings 等に居ても “勝手に /today へ飛ばさない”
+ *      - 二重発火・URL汚染を避けるため、タブがある場合は navigate/openWindow をしない
+ *    - タブが無ければ /today?from=push&task_id=... を openWindow（到達保証）
  *
  * 重要:
- * - 「通知クリックで必ず /today に寄せる」ため、payload.url / data.url はナビゲーションに使わない
- *   （/today?week=... などで週UIが残る事故を防ぐ）
- * - payload の title/body 等が巨大でも落ちないように、notification.data の文字列は上限で切る（運用安全弁）
+ * - payload.url / data.url はナビゲーションに使わない（常に /today?from=push... を起点にする）
+ * - payload の title/body が巨大でも落ちないよう、notification.data の文字列は上限で切る
  */
 
 self.addEventListener("install", () => {
@@ -26,7 +23,6 @@ self.addEventListener("activate", (event) => {
 });
 
 // ===== size guard (運用安全弁) =====
-// ※好みで調整OK（titleは短め、bodyは少し長め）
 const LIMITS = {
     title: 80,
     body: 500,
@@ -66,12 +62,7 @@ function toSameOriginUrl(origin, urlOrPath, fallbackPath) {
     const fallback = new URL(fallbackPath || "/today?from=push", origin);
 
     try {
-        // NOTE: new URL handles:
-        // - absolute: https://...
-        // - relative: /today...
-        // - scheme-relative: //evil.com/... (=> cross-origin)
         const resolved = new URL(urlOrPath || fallback.href, origin);
-
         if (resolved.origin !== fallback.origin) return fallback.href;
         return resolved.href;
     } catch (e) {
@@ -102,15 +93,34 @@ function sanitizeNotificationData(payload, openUrl, taskId) {
         evaluation_type: toStrOrNull(
             clampStr(payload.evaluation_type ?? "", LIMITS.evaluation_type),
         ),
-        url: openUrl,
+        url: openUrl, // ★保持はするが、クリック時ナビには使わない
     };
 }
 
-function isTodayPageUrl(origin, clientUrl) {
+function isSameOriginWindowClient(origin, client) {
+    return (
+        client &&
+        typeof client.url === "string" &&
+        client.url.startsWith(origin)
+    );
+}
+
+/**
+ * “アプリタブ” 判定（安全側）
+ * - same-origin の window client だけ対象
+ * - /login, /register は “アプリタブ” とみなさない（勝手にモーダル出すのが微妙なので）
+ * - それ以外は「アプリが動いているタブ」として扱う
+ */
+function isAppClient(origin, clientUrl) {
     try {
         const u = new URL(clientUrl);
         if (!u.href.startsWith(origin)) return false;
-        return u.pathname === "/today";
+
+        const p = u.pathname || "/";
+        if (p === "/login" || p === "/register") return false;
+
+        // SPA配下は基本OK（/today /week /settings/... など）
+        return true;
     } catch (e) {
         return false;
     }
@@ -156,19 +166,17 @@ self.addEventListener("push", (event) => {
             const origin = self.location.origin;
             const fallbackPath = buildFallbackPath(taskId);
 
-            // ★重要: 通知クリックの遷移先は常に fallbackPath（/today?from=push...）に固定
-            // payload.url はナビゲーションには使わない（/today?week=... で週UIが残る事故を防ぐ）
+            // ★重要: クリック遷移用の openUrl は常に /today?from=push... を起点に固定
             const openUrl = toSameOriginUrl(origin, fallbackPath, fallbackPath);
 
             const options = {
                 body,
-                // ★通知データは必要最小限に限定（トークン混入・任意URL混入を防止）
                 data: sanitizeNotificationData(
                     { ...payload, title, body },
                     openUrl,
                     taskId,
                 ),
-                // tag を付けたいならここ（通知が積まれすぎるのが嫌なら）
+                // tag を付けたいならここ
                 // tag: taskId != null ? `reminder-${taskId}` : "reminder",
             };
 
@@ -195,30 +203,29 @@ self.addEventListener("notificationclick", (event) => {
             // ★重要: data.url も信用しない。常に /today?from=push... に固定
             const openUrl = toSameOriginUrl(origin, fallbackPath, fallbackPath);
 
-            // 初回のクライアント探索
+            // クライアント探索
             const clientList = await self.clients.matchAll({
                 type: "window",
                 includeUncontrolled: true,
             });
 
-            const sameOriginClients = clientList.filter(
-                (c) => typeof c.url === "string" && c.url.startsWith(origin),
+            const sameOriginClients = clientList.filter((c) =>
+                isSameOriginWindowClient(origin, c),
             );
 
-            // ★最優先: 既に /today を開いているタブがあるなら、それだけを使う
-            const todayClient = sameOriginClients.find((c) =>
-                isTodayPageUrl(origin, c.url),
+            // ★最優先: “アプリが開いてるタブ” があれば、そこを使う（/today限定にしない）
+            const appClient = sameOriginClients.find((c) =>
+                isAppClient(origin, c.url),
             );
 
-            if (todayClient) {
+            if (appClient) {
                 try {
-                    await todayClient.focus();
+                    await appClient.focus();
                 } catch (_) {}
 
-                // ★/today がある場合のみ message（1回だけ）
-                // data は notification.data（ホワイトリスト + 上限済み）なのでそのまま送って良い
+                // ★タブがある場合は “遷移しない”。モーダルを開くだけ。
                 try {
-                    todayClient.postMessage({
+                    appClient.postMessage({
                         type: "REMINDER_CLICK",
                         source: "notificationclick",
                         payload: data,
@@ -228,59 +235,7 @@ self.addEventListener("notificationclick", (event) => {
                 return;
             }
 
-            // ★/today が無い場合:
-            // - message は送らない（/today以外で開いても二重トリガー/未ログイン/画面不一致が起きやすい）
-            // - /today?from=push... に寄せる（navigate → openWindow救済）
-            const target = sameOriginClients[0] || clientList[0];
-
-            if (target) {
-                try {
-                    await target.focus();
-                } catch (_) {}
-
-                let navigated = false;
-                try {
-                    await target.navigate(openUrl);
-                    navigated = true;
-                } catch (_) {
-                    navigated = false;
-                }
-
-                if (navigated) return;
-            }
-
-            // navigate が失敗した場合の救済:
-            // ★タブ増殖抑止のため、openWindow 前にもう一度 /today が生えたか再確認
-            try {
-                const refreshed = await self.clients.matchAll({
-                    type: "window",
-                    includeUncontrolled: true,
-                });
-
-                const refreshedSameOrigin = refreshed.filter(
-                    (c) =>
-                        typeof c.url === "string" && c.url.startsWith(origin),
-                );
-
-                const refreshedToday = refreshedSameOrigin.find((c) =>
-                    isTodayPageUrl(origin, c.url),
-                );
-
-                if (refreshedToday) {
-                    try {
-                        await refreshedToday.focus();
-                    } catch (_) {}
-                    try {
-                        refreshedToday.postMessage({
-                            type: "REMINDER_CLICK",
-                            source: "notificationclick",
-                            payload: data,
-                        });
-                    } catch (_) {}
-                    return;
-                }
-            } catch (_) {}
-
+            // ★タブが無い場合のみ openWindow（到達保証）
             try {
                 await self.clients.openWindow(openUrl);
             } catch (_) {}

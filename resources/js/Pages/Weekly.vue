@@ -6,7 +6,13 @@
       <div v-if="!ready" class="p-4 md:p-6 text-sm text-gray-500">
         読み込み中…
       </div>
-      <WeekTab v-else :refresh-key="refreshKey" />
+
+      <!-- ✅ refreshKey で確実に再生成（同期の最終手段） -->
+      <WeekTab
+        v-else
+        :key="refreshKey"
+        :refresh-key="refreshKey"
+      />
     </main>
   </div>
 </template>
@@ -25,11 +31,48 @@ function bumpRefresh() {
   refreshKey.value++;
 }
 
-const handler = (e) => {
+/**
+ * reminder-action を受けて WeekTab を同期
+ * - 要件: weekタブのときもモーダルで「完了(done)」なら同期
+ * - 方針:
+ *   - done だけ同期（cancel/snoozeは現状スルー）
+ *   - 二重発火対策の dedupe
+ */
+const recent = new Map();
+const DEDUPE_MS = 1500;
+
+function buildKey(d) {
+  const type = d?.type ?? "unknown";
+  const task = d?.task_id ?? "none";
+  const date = d?.payload?.date ?? "none";
+  const habitTime = d?.payload?.habit_time_id ?? "none";
+  return `${type}|${task}|${date}|${habitTime}`;
+}
+
+function shouldBump(d) {
+  const now = Date.now();
+
+  for (const [k, ts] of recent.entries()) {
+    if (now - ts > DEDUPE_MS) recent.delete(k);
+  }
+
+  const key = buildKey(d);
+  const prev = recent.get(key);
+  if (typeof prev === "number" && now - prev <= DEDUPE_MS) return false;
+
+  recent.set(key, now);
+  return true;
+}
+
+function onReminderAction(e) {
   const d = e?.detail;
   if (!d) return;
+
+  if (d.type !== "done") return;
+  if (!shouldBump(d)) return;
+
   bumpRefresh();
-};
+}
 
 onMounted(() => {
   let painted = false;
@@ -43,10 +86,10 @@ onMounted(() => {
     if (!painted) ready.value = true;
   }, 80);
 
-  window.addEventListener("reminder-action", handler);
+  window.addEventListener("reminder-action", onReminderAction);
 });
 
 onUnmounted(() => {
-  window.removeEventListener("reminder-action", handler);
+  window.removeEventListener("reminder-action", onReminderAction);
 });
 </script>

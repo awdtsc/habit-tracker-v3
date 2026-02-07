@@ -36,6 +36,20 @@ class PushSubscription extends Model
     ];
 
     /**
+     * endpoint から endpoint_hash を作る（Controller互換のため public static で提供）
+     * - trim してから sha256
+     * - 大文字HEX
+     */
+    public static function hashEndpoint(string $endpoint): string
+    {
+        $endpoint = trim($endpoint);
+        if ($endpoint === '') {
+            return '';
+        }
+        return strtoupper(hash('sha256', $endpoint));
+    }
+
+    /**
      * 保存時に endpoint_hash を自動計算（endpoint が空の場合はそのまま）
      */
     protected static function booted(): void
@@ -46,7 +60,7 @@ class PushSubscription extends Model
                 $model->endpoint = $endpoint;
 
                 if ($endpoint !== '') {
-                    $model->endpoint_hash = strtoupper(hash('sha256', $endpoint));
+                    $model->endpoint_hash = static::hashEndpoint($endpoint);
                 }
             }
         });
@@ -58,7 +72,7 @@ class PushSubscription extends Model
         $this->attributes['endpoint'] = $value;
 
         if ($value) {
-            $this->attributes['endpoint_hash'] = strtoupper(hash('sha256', $value));
+            $this->attributes['endpoint_hash'] = static::hashEndpoint((string) $value);
         }
     }
 
@@ -74,20 +88,46 @@ class PushSubscription extends Model
 
     /**
      * subscribe() の payload から Upsert
+     *
+     * ★重要: endpoint_hash のみで他ユーザーの行を奪えないようにガードする
+     * - 既存行の user_id が別なら、keys(p256dh/auth) が一致する場合のみ「同一端末」扱いで移管を許可
+     * - 一致しない場合は衝突として例外（呼び出し側で 409 に変換推奨）
      */
     public static function upsertFromWebPush(int $userId, array $payload): self
     {
         $endpoint = trim((string)($payload['endpoint'] ?? ''));
-        $hash = $endpoint ? strtoupper(hash('sha256', $endpoint)) : null;
+        if ($endpoint === '') {
+            throw new \InvalidArgumentException('endpoint is required');
+        }
+
+        $hash = static::hashEndpoint($endpoint);
+
+        $p256dh = (string)($payload['keys']['p256dh'] ?? $payload['p256dh'] ?? '');
+        $auth   = (string)($payload['keys']['auth'] ?? $payload['auth'] ?? '');
+
+        $contentEncoding = (string)($payload['contentEncoding'] ?? $payload['content_encoding'] ?? 'aes128gcm');
+
+        $existing = static::query()
+            ->where('endpoint_hash', $hash)
+            ->first();
+
+        if ($existing && (int)$existing->user_id !== (int)$userId) {
+            $sameKeys = hash_equals((string)$existing->p256dh, (string)$p256dh)
+                && hash_equals((string)$existing->auth, (string)$auth);
+
+            if (!$sameKeys) {
+                throw new \RuntimeException('SUBSCRIPTION_CONFLICT');
+            }
+        }
 
         return static::updateOrCreate(
             ['endpoint_hash' => $hash],
             [
                 'user_id'          => $userId,
                 'endpoint'         => $endpoint,
-                'p256dh'           => (string)($payload['keys']['p256dh'] ?? $payload['p256dh'] ?? ''),
-                'auth'             => (string)($payload['keys']['auth'] ?? $payload['auth'] ?? ''),
-                'content_encoding' => (string)($payload['contentEncoding'] ?? $payload['content_encoding'] ?? 'aes128gcm'),
+                'p256dh'           => $p256dh,
+                'auth'             => $auth,
+                'content_encoding' => $contentEncoding,
                 'device'           => $payload['device'] ?? null,
                 'device_hint'      => $payload['device_hint'] ?? null,
                 'user_agent'       => $payload['userAgent'] ?? $payload['user_agent'] ?? request()->userAgent(),

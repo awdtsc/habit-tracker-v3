@@ -5,7 +5,6 @@ namespace App\Http\Controllers\Api\V1;
 use App\Http\Controllers\Controller;
 use App\Models\PushSubscription;
 use Illuminate\Http\Request;
-use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Minishlink\WebPush\Subscription;
 
@@ -35,7 +34,8 @@ class PushSubscriptionController extends Controller
         ]);
 
         $endpoint = $data['endpoint'];
-        $endpointHash = strtoupper(hash('sha256', $endpoint));
+        $endpointHash = PushSubscription::hashEndpoint($endpoint);
+
         $p256dh = $data['keys']['p256dh'];
         $auth = $data['keys']['auth'];
 
@@ -43,12 +43,31 @@ class PushSubscriptionController extends Controller
             ?? $data['content_encoding']
             ?? 'aesgcm';
 
-        // endpoint は unique 前提（DB制約に合わせる）
+        // 既存購読があるか（endpoint_hash で安定同一性）
+        $existing = PushSubscription::query()
+            ->where('endpoint_hash', $endpointHash)
+            ->first();
+
+        if ($existing && (int) $existing->user_id !== (int) $user->id) {
+            // ★穴塞ぎ：別ユーザーの行を“endpointだけで”上書きさせない
+            // ただし、keys が一致するなら「同一端末の同一購読」なので移管は許可
+            $sameKeys = hash_equals((string) $existing->p256dh, (string) $p256dh)
+                && hash_equals((string) $existing->auth, (string) $auth);
+
+            if (!$sameKeys) {
+                return response()->json([
+                    'message' => 'Subscription endpoint is already registered to another user.',
+                    'code' => 'SUBSCRIPTION_CONFLICT',
+                ], 409);
+            }
+        }
+
+        // endpoint が unique でも安全に更新されるよう、endpoint_hash ベースで updateOrCreate
         $sub = PushSubscription::query()->updateOrCreate(
-            ['endpoint' => $endpoint],
+            ['endpoint_hash' => $endpointHash],
             [
                 'user_id' => $user->id,
-                'endpoint_hash' => $endpointHash,
+                'endpoint' => $endpoint,
                 'p256dh' => $p256dh,
                 'auth' => $auth,
                 'content_encoding' => $contentEncoding,
@@ -79,9 +98,9 @@ class PushSubscriptionController extends Controller
         ]);
 
         $endpoint = $data['endpoint'];
-        $endpointHash = strtoupper(hash('sha256', $endpoint));
+        $endpointHash = PushSubscription::hashEndpoint($endpoint);
 
-        // 「current user の行だけ」を消す（endpoint uniqueでも安全）
+        // 「current user の行だけ」を消す
         $deleted = PushSubscription::query()
             ->where('user_id', $user->id)
             ->where('endpoint_hash', $endpointHash)
@@ -174,7 +193,6 @@ class PushSubscriptionController extends Controller
             }
         } catch (\Throwable $e) {
             Log::warning('push/test flush failed', ['e' => $e->getMessage()]);
-            // flush自体が落ちたら 500 にするより ok=false で返す（テストのため）
             return response()->json([
                 'ok' => false,
                 'sent' => 0,
@@ -194,11 +212,9 @@ class PushSubscriptionController extends Controller
     }
 
     /**
-     * ★テストから partialMock で差し替えるため:
+     * テストから partialMock で差し替えるため:
      * - protected
      * - 戻り値型は付けない（Mockery を返しても TypeError にならない）
-     *
-     * @return \Minishlink\WebPush\WebPush
      */
     protected function makeWebPush()
     {

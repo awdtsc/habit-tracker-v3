@@ -21,6 +21,19 @@ Schedule::command('sanctum:prune-expired --hours=24')
     ->name('sanctum:prune-expired');
 
 // ------------------------------------------------------------
+// M2.5: Prune stale push subscriptions
+// - Run daily (JST)
+// - Remove subscriptions whose last_seen_at is older than N days (default 30)
+// - Prevent subscription graveyard / DB bloat in production
+// ------------------------------------------------------------
+Schedule::command('push:prune --days=30')
+    ->dailyAt('03:30')
+    ->timezone('Asia/Tokyo')
+    ->withoutOverlapping(60) // minutes
+    ->onOneServer()
+    ->name('push:prune');
+
+// ------------------------------------------------------------
 // M3: Dispatch due reminders (web push)
 // - Run every minute (JST)
 // - withoutOverlapping: prevent concurrent runs

@@ -58,7 +58,8 @@
       </div>
       <div class="text-xs text-gray-500 leading-relaxed">
         ※ 419(Page Expired) が出る場合は CSRF cookie が未取得です。ここでは自動で /sanctum/csrf-cookie を取得します。<br />
-        ※ 401 が出る場合は未ログインです（/today 等でログインしてから戻ってきてください）。
+        ※ 401 が出る場合は未ログインです（/today 等でログインしてから戻ってきてください）。<br />
+        ※ 「購読できない」場合、ここに必ず原因（SW登録/ready/権限/認証等）が表示されます。
       </div>
     </div>
 
@@ -71,6 +72,7 @@
 
 <script setup>
 import { ref, onMounted } from "vue";
+import { ensureServiceWorkerRegistered } from "@/registerSw";
 
 const permission = ref(typeof Notification !== "undefined" ? Notification.permission : "unsupported");
 const swScope = ref("");
@@ -86,6 +88,17 @@ function log(...a) {
       .map((x) => (typeof x === "string" ? x : JSON.stringify(x, null, 2)))
       .join(" ")
   );
+}
+
+function formatSwFailure(sw) {
+  const head = `[sw:${sw?.step || "unknown"}] ${sw?.reason || "failed"}`;
+  const detailMsg =
+    sw?.detail?.message
+      ? ` detail=${sw.detail.message}`
+      : sw?.detail
+      ? ` detail=${JSON.stringify(sw.detail)}`
+      : "";
+  return head + detailMsg;
 }
 
 function getCookie(name) {
@@ -104,12 +117,22 @@ function urlBase64ToUint8Array(base64String) {
   return out;
 }
 
-async function ensureSw() {
-  if (!("serviceWorker" in navigator)) throw new Error("serviceWorker not supported");
-  const reg = await navigator.serviceWorker.register("/sw.js");
-  await navigator.serviceWorker.ready;
-  swScope.value = reg.scope;
-  return reg;
+// /sw.js を指す registration を優先的に取る（regs[0]依存をやめる）
+async function findSwRegistration() {
+  if (!("serviceWorker" in navigator)) return null;
+  const regs = await navigator.serviceWorker.getRegistrations().catch(() => []);
+  if (!Array.isArray(regs) || regs.length === 0) return null;
+
+  const match = regs.find((r) => {
+    const url =
+      r?.active?.scriptURL ||
+      r?.installing?.scriptURL ||
+      r?.waiting?.scriptURL ||
+      "";
+    return typeof url === "string" && url.includes("/sw.js");
+  });
+
+  return match || regs[0] || null;
 }
 
 async function ensurePermission() {
@@ -164,8 +187,7 @@ async function refreshState() {
       return;
     }
 
-    const regs = await navigator.serviceWorker.getRegistrations();
-    const reg = regs[0] || null;
+    const reg = await findSwRegistration();
     swScope.value = reg?.scope || "";
 
     if (!reg) {
@@ -207,14 +229,37 @@ async function doSubscribe() {
   try {
     const key = import.meta.env.VITE_VAPID_PUBLIC_KEY;
     vapidOk.value = !!key;
-    if (!key) throw new Error("Missing VITE_VAPID_PUBLIC_KEY in .env");
+    if (!key) {
+      log("[fatal] Missing VITE_VAPID_PUBLIC_KEY in .env");
+      throw new Error("Missing VITE_VAPID_PUBLIC_KEY in .env");
+    }
 
-    const reg = await ensureSw();
+    // ★ SW登録/ready を「絶対に理由つきでUIへ」出す
+    const sw = await ensureServiceWorkerRegistered();
+    if (!sw?.ok) {
+      const msg = formatSwFailure(sw);
+      log("[subscribe blocked]", msg);
+      throw new Error(msg);
+    }
+
+    // registration 取得（scope表示・pushManager用）
+    const reg = sw.reg || (await findSwRegistration());
+    if (!reg) {
+      log("[subscribe blocked]", "service worker registration not found after ensure");
+      throw new Error("service worker registration not found after ensure");
+    }
+    swScope.value = reg.scope;
+
     await ensurePermission();
+
     await ensureCsrfCookie();
     await apiGetMe();
-    if (!authOk.value) throw new Error("Not authenticated. Please login first.");
+    if (!authOk.value) {
+      log("[subscribe blocked]", "Not authenticated. Please login first.");
+      throw new Error("Not authenticated. Please login first.");
+    }
 
+    // 既存を再利用（重複防止）
     const existing = await reg.pushManager.getSubscription();
     const sub =
       existing ||
@@ -230,6 +275,7 @@ async function doSubscribe() {
 
     await refreshState();
   } catch (e) {
+    // ここにも必ず落とす（上でUIに出してても二重で残るだけ）
     log("[subscribe error]", String(e?.message ?? e));
   } finally {
     busy.value = false;
@@ -242,8 +288,7 @@ async function doUnsubscribe() {
   logs.value = [];
 
   try {
-    const regs = await navigator.serviceWorker.getRegistrations();
-    const reg = regs[0];
+    const reg = await findSwRegistration();
     if (!reg) throw new Error("no service worker registration");
 
     const sub = await reg.pushManager.getSubscription();

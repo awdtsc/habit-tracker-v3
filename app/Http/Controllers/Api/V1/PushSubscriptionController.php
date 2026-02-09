@@ -10,13 +10,6 @@ use Minishlink\WebPush\Subscription;
 
 class PushSubscriptionController extends Controller
 {
-    /**
-     * POST /api/v1/push/subscribe
-     * payload:
-     * - endpoint: string
-     * - keys: { p256dh: string, auth: string }
-     * - contentEncoding or content_encoding: string (optional)
-     */
     public function subscribe(Request $request)
     {
         $user = $request->user();
@@ -43,14 +36,11 @@ class PushSubscriptionController extends Controller
             ?? $data['content_encoding']
             ?? 'aesgcm';
 
-        // 既存購読があるか（endpoint_hash で安定同一性）
         $existing = PushSubscription::query()
             ->where('endpoint_hash', $endpointHash)
             ->first();
 
         if ($existing && (int) $existing->user_id !== (int) $user->id) {
-            // ★穴塞ぎ：別ユーザーの行を“endpointだけで”上書きさせない
-            // ただし、keys が一致するなら「同一端末の同一購読」なので移管は許可
             $sameKeys = hash_equals((string) $existing->p256dh, (string) $p256dh)
                 && hash_equals((string) $existing->auth, (string) $auth);
 
@@ -62,7 +52,6 @@ class PushSubscriptionController extends Controller
             }
         }
 
-        // endpoint が unique でも安全に更新されるよう、endpoint_hash ベースで updateOrCreate
         $sub = PushSubscription::query()->updateOrCreate(
             ['endpoint_hash' => $endpointHash],
             [
@@ -81,11 +70,6 @@ class PushSubscriptionController extends Controller
         ], 200);
     }
 
-    /**
-     * POST /api/v1/push/unsubscribe
-     * payload:
-     * - endpoint: string
-     */
     public function unsubscribe(Request $request)
     {
         $user = $request->user();
@@ -97,10 +81,8 @@ class PushSubscriptionController extends Controller
             'endpoint' => ['required', 'string', 'max:2048'],
         ]);
 
-        $endpoint = $data['endpoint'];
-        $endpointHash = PushSubscription::hashEndpoint($endpoint);
+        $endpointHash = PushSubscription::hashEndpoint($data['endpoint']);
 
-        // 「current user の行だけ」を消す
         $deleted = PushSubscription::query()
             ->where('user_id', $user->id)
             ->where('endpoint_hash', $endpointHash)
@@ -112,16 +94,6 @@ class PushSubscriptionController extends Controller
         ], 200);
     }
 
-    /**
-     * POST /api/v1/push/test
-     * payload:
-     * - title: string
-     * - body: string
-     * - url: string
-     *
-     * NOTE:
-     * - production では禁止（403）
-     */
     public function test(Request $request)
     {
         if (app()->environment('production')) {
@@ -138,6 +110,17 @@ class PushSubscriptionController extends Controller
             'body' => ['nullable', 'string', 'max:500'],
             'url' => ['required', 'string', 'max:2048'],
         ]);
+
+        $cfg = config('webpush.vapid');
+        if (empty($cfg['public_key']) || empty($cfg['private_key'])) {
+            return response()->json([
+                'ok' => false,
+                'sent' => 0,
+                'failed' => 0,
+                'removed' => 0,
+                'errors' => [['reason' => 'Missing VAPID keys']],
+            ], 200);
+        }
 
         $subs = PushSubscription::query()
             ->where('user_id', $user->id)
@@ -185,10 +168,45 @@ class PushSubscriptionController extends Controller
             foreach ($webPush->flush() as $report) {
                 if (method_exists($report, 'isSuccess') && $report->isSuccess()) {
                     $sent++;
-                } else {
-                    $failed++;
-                    $reason = method_exists($report, 'getReason') ? (string) $report->getReason() : 'failed';
-                    $errors[] = ['reason' => $reason];
+                    continue;
+                }
+
+                $failed++;
+
+                $reason = method_exists($report, 'getReason')
+                    ? (string) $report->getReason()
+                    : 'failed';
+
+                $statusCode = null;
+                if (method_exists($report, 'getResponse')) {
+                    $resp = $report->getResponse();
+                    if ($resp && method_exists($resp, 'getStatusCode')) {
+                        $statusCode = $resp->getStatusCode();
+                    }
+                }
+
+                $endpoint = method_exists($report, 'getEndpoint')
+                    ? (string) $report->getEndpoint()
+                    : '';
+
+                // ★重要: DBと同一のハッシュ関数で統一
+                $endpointHash = $endpoint !== ''
+                    ? PushSubscription::hashEndpoint($endpoint)
+                    : null;
+
+                $errors[] = [
+                    'endpoint_hash' => $endpointHash,
+                    'status' => $statusCode,
+                    'reason' => $reason,
+                ];
+
+                if ($endpointHash && ($statusCode === 404 || $statusCode === 410)) {
+                    $deleted = PushSubscription::query()
+                        ->where('user_id', $user->id)
+                        ->where('endpoint_hash', $endpointHash)
+                        ->delete();
+
+                    $removed += (int) $deleted;
                 }
             }
         } catch (\Throwable $e) {
@@ -211,11 +229,6 @@ class PushSubscriptionController extends Controller
         ], 200);
     }
 
-    /**
-     * テストから partialMock で差し替えるため:
-     * - protected
-     * - 戻り値型は付けない（Mockery を返しても TypeError にならない）
-     */
     protected function makeWebPush()
     {
         $cfg = config('webpush.vapid');

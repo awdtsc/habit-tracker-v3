@@ -9,8 +9,8 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
  * PushSubscription
  *
  * Web Push の購読情報（端末ごとに 1 件を想定）
- * - 重複防止は endpoint_hash(sha256) の UNIQUE で担保
- * - endpoint_hash は大文字HEXに統一
+ * - DBの重複防止は endpoint の UNIQUE が主（環境差分を吸収しやすい）
+ * - endpoint_hash は endpoint の sha256（大文字HEX）で補助キー
  */
 class PushSubscription extends Model
 {
@@ -35,45 +35,25 @@ class PushSubscription extends Model
         'last_seen_at' => 'datetime',
     ];
 
-    /**
-     * endpoint から endpoint_hash を作る（Controller互換のため public static で提供）
-     * - trim してから sha256
-     * - 大文字HEX
-     */
     public static function hashEndpoint(string $endpoint): string
     {
         $endpoint = trim($endpoint);
-        if ($endpoint === '') {
-            return '';
-        }
+        if ($endpoint === '') return '';
         return strtoupper(hash('sha256', $endpoint));
     }
 
-    /**
-     * 保存時に endpoint_hash を自動計算（endpoint が空の場合はそのまま）
-     */
     protected static function booted(): void
     {
         static::saving(function (self $model) {
-            if (isset($model->endpoint)) {
-                $endpoint = trim((string) $model->endpoint);
-                $model->endpoint = $endpoint;
+            if (!isset($model->endpoint)) return;
 
-                if ($endpoint !== '') {
-                    $model->endpoint_hash = static::hashEndpoint($endpoint);
-                }
+            $endpoint = trim((string) $model->endpoint);
+            $model->endpoint = $endpoint;
+
+            if ($endpoint !== '') {
+                $model->endpoint_hash = static::hashEndpoint($endpoint);
             }
         });
-    }
-
-    public function setEndpointAttribute($value): void
-    {
-        $value = is_string($value) ? trim($value) : $value;
-        $this->attributes['endpoint'] = $value;
-
-        if ($value) {
-            $this->attributes['endpoint_hash'] = static::hashEndpoint((string) $value);
-        }
     }
 
     public function user(): BelongsTo
@@ -87,9 +67,9 @@ class PushSubscription extends Model
     }
 
     /**
-     * subscribe() の payload から Upsert
+     * subscribe() payload から Upsert（DBのUNIQUE endpoint と一致させる）
      *
-     * ★重要: endpoint_hash のみで他ユーザーの行を奪えないようにガードする
+     * ★重要: endpoint を他ユーザーから奪えないようにガード
      * - 既存行の user_id が別なら、keys(p256dh/auth) が一致する場合のみ「同一端末」扱いで移管を許可
      * - 一致しない場合は衝突として例外（呼び出し側で 409 に変換推奨）
      */
@@ -100,15 +80,23 @@ class PushSubscription extends Model
             throw new \InvalidArgumentException('endpoint is required');
         }
 
-        $hash = static::hashEndpoint($endpoint);
-
         $p256dh = (string)($payload['keys']['p256dh'] ?? $payload['p256dh'] ?? '');
         $auth   = (string)($payload['keys']['auth'] ?? $payload['auth'] ?? '');
 
         $contentEncoding = (string)($payload['contentEncoding'] ?? $payload['content_encoding'] ?? 'aes128gcm');
 
+        // user agent は request() が無い文脈（CLI等）でも落ちないようにする
+        $ua = $payload['userAgent'] ?? $payload['user_agent'] ?? null;
+        if (!is_string($ua) || $ua === '') {
+            try {
+                $ua = app('request')->userAgent();
+            } catch (\Throwable) {
+                $ua = null;
+            }
+        }
+
         $existing = static::query()
-            ->where('endpoint_hash', $hash)
+            ->where('endpoint', $endpoint) // ★DBの一意制約と一致
             ->first();
 
         if ($existing && (int)$existing->user_id !== (int)$userId) {
@@ -120,17 +108,18 @@ class PushSubscription extends Model
             }
         }
 
+        // ★upsert も endpoint をキーに（DBと一致）
         return static::updateOrCreate(
-            ['endpoint_hash' => $hash],
+            ['endpoint' => $endpoint],
             [
                 'user_id'          => $userId,
-                'endpoint'         => $endpoint,
+                'endpoint_hash'    => static::hashEndpoint($endpoint),
                 'p256dh'           => $p256dh,
                 'auth'             => $auth,
                 'content_encoding' => $contentEncoding,
                 'device'           => $payload['device'] ?? null,
                 'device_hint'      => $payload['device_hint'] ?? null,
-                'user_agent'       => $payload['userAgent'] ?? $payload['user_agent'] ?? request()->userAgent(),
+                'user_agent'       => $ua,
                 'last_used_at'     => now(),
                 'last_seen_at'     => now(),
             ]

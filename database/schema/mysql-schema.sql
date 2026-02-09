@@ -4,37 +4,29 @@
 /*!40014 SET @OLD_FOREIGN_KEY_CHECKS=@@FOREIGN_KEY_CHECKS, FOREIGN_KEY_CHECKS=0 */;
 /*!40101 SET @OLD_SQL_MODE=@@SQL_MODE, SQL_MODE='NO_AUTO_VALUE_ON_ZERO' */;
 /*!40111 SET @OLD_SQL_NOTES=@@SQL_NOTES, SQL_NOTES=0 */;
-
 DROP TABLE IF EXISTS `cache`;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
 /*!40101 SET character_set_client = utf8 */;
-
 CREATE TABLE `cache` (
   `key` varchar(255) NOT NULL,
   `value` mediumtext NOT NULL,
   `expiration` int(11) NOT NULL,
   PRIMARY KEY (`key`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-
 /*!40101 SET character_set_client = @saved_cs_client */;
-
 DROP TABLE IF EXISTS `cache_locks`;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
 /*!40101 SET character_set_client = utf8 */;
-
 CREATE TABLE `cache_locks` (
   `key` varchar(255) NOT NULL,
   `owner` varchar(255) NOT NULL,
   `expiration` int(11) NOT NULL,
   PRIMARY KEY (`key`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-
 /*!40101 SET character_set_client = @saved_cs_client */;
-
 DROP TABLE IF EXISTS `failed_jobs`;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
 /*!40101 SET character_set_client = utf8 */;
-
 CREATE TABLE `failed_jobs` (
   `id` bigint(20) unsigned NOT NULL AUTO_INCREMENT,
   `uuid` varchar(255) NOT NULL,
@@ -46,13 +38,10 @@ CREATE TABLE `failed_jobs` (
   PRIMARY KEY (`id`),
   UNIQUE KEY `failed_jobs_uuid_unique` (`uuid`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-
 /*!40101 SET character_set_client = @saved_cs_client */;
-
 DROP TABLE IF EXISTS `habit_logs`;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
 /*!40101 SET character_set_client = utf8 */;
-
 CREATE TABLE `habit_logs` (
   `id` bigint(20) unsigned NOT NULL AUTO_INCREMENT,
   `habit_id` bigint(20) unsigned NOT NULL,
@@ -75,13 +64,10 @@ CREATE TABLE `habit_logs` (
   CONSTRAINT `habit_logs_habit_time_id_foreign` FOREIGN KEY (`habit_time_id`) REFERENCES `habit_times` (`id`) ON DELETE CASCADE,
   CONSTRAINT `habit_logs_user_id_foreign` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-
 /*!40101 SET character_set_client = @saved_cs_client */;
-
 DROP TABLE IF EXISTS `habit_times`;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
 /*!40101 SET character_set_client = utf8 */;
-
 CREATE TABLE `habit_times` (
   `id` bigint(20) unsigned NOT NULL AUTO_INCREMENT,
   `habit_id` bigint(20) unsigned NOT NULL,
@@ -94,13 +80,10 @@ CREATE TABLE `habit_times` (
   KEY `habit_times_habit_id_foreign` (`habit_id`),
   CONSTRAINT `habit_times_habit_id_foreign` FOREIGN KEY (`habit_id`) REFERENCES `habits` (`id`) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-
 /*!40101 SET character_set_client = @saved_cs_client */;
-
 DROP TABLE IF EXISTS `habits`;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
 /*!40101 SET character_set_client = utf8 */;
-
 CREATE TABLE `habits` (
   `id` bigint(20) unsigned NOT NULL AUTO_INCREMENT,
   `user_id` bigint(20) unsigned NOT NULL,
@@ -122,13 +105,10 @@ CREATE TABLE `habits` (
   KEY `habits_user_id_foreign` (`user_id`),
   CONSTRAINT `habits_user_id_foreign` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-
 /*!40101 SET character_set_client = @saved_cs_client */;
-
 DROP TABLE IF EXISTS `job_batches`;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
 /*!40101 SET character_set_client = utf8 */;
-
 CREATE TABLE `job_batches` (
   `id` varchar(255) NOT NULL,
   `name` varchar(255) NOT NULL,
@@ -142,13 +122,10 @@ CREATE TABLE `job_batches` (
   `finished_at` int(11) DEFAULT NULL,
   PRIMARY KEY (`id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-
 /*!40101 SET character_set_client = @saved_cs_client */;
-
 DROP TABLE IF EXISTS `jobs`;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
 /*!40101 SET character_set_client = utf8 */;
-
 CREATE TABLE `jobs` (
   `id` bigint(20) unsigned NOT NULL AUTO_INCREMENT,
   `queue` varchar(255) NOT NULL,
@@ -160,39 +137,30 @@ CREATE TABLE `jobs` (
   PRIMARY KEY (`id`),
   KEY `jobs_queue_index` (`queue`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-
 /*!40101 SET character_set_client = @saved_cs_client */;
-
 DROP TABLE IF EXISTS `migrations`;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
 /*!40101 SET character_set_client = utf8 */;
-
 CREATE TABLE `migrations` (
   `id` int(10) unsigned NOT NULL AUTO_INCREMENT,
   `migration` varchar(255) NOT NULL,
   `batch` int(11) NOT NULL,
   PRIMARY KEY (`id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-
 /*!40101 SET character_set_client = @saved_cs_client */;
-
 DROP TABLE IF EXISTS `password_reset_tokens`;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
 /*!40101 SET character_set_client = utf8 */;
-
 CREATE TABLE `password_reset_tokens` (
   `email` varchar(255) NOT NULL,
   `token` varchar(255) NOT NULL,
   `created_at` timestamp NULL DEFAULT NULL,
   PRIMARY KEY (`email`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-
 /*!40101 SET character_set_client = @saved_cs_client */;
-
 DROP TABLE IF EXISTS `personal_access_tokens`;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
 /*!40101 SET character_set_client = utf8 */;
-
 CREATE TABLE `personal_access_tokens` (
   `id` bigint(20) unsigned NOT NULL AUTO_INCREMENT,
   `tokenable_type` varchar(255) NOT NULL,
@@ -209,13 +177,10 @@ CREATE TABLE `personal_access_tokens` (
   KEY `personal_access_tokens_tokenable_type_tokenable_id_index` (`tokenable_type`,`tokenable_id`),
   KEY `personal_access_tokens_expires_at_index` (`expires_at`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-
 /*!40101 SET character_set_client = @saved_cs_client */;
-
 DROP TABLE IF EXISTS `push_subscriptions`;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
 /*!40101 SET character_set_client = utf8 */;
-
 CREATE TABLE `push_subscriptions` (
   `id` bigint(20) unsigned NOT NULL AUTO_INCREMENT,
   `user_id` bigint(20) unsigned DEFAULT NULL,
@@ -241,13 +206,38 @@ CREATE TABLE `push_subscriptions` (
   KEY `push_subscriptions_last_used_at_index` (`last_used_at`),
   CONSTRAINT `push_subscriptions_user_id_foreign` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-
 /*!40101 SET character_set_client = @saved_cs_client */;
-
+DROP TABLE IF EXISTS `push_subscriptions_backup`;
+/*!40101 SET @saved_cs_client     = @@character_set_client */;
+/*!40101 SET character_set_client = utf8 */;
+CREATE TABLE `push_subscriptions_backup` (
+  `id` bigint(20) unsigned NOT NULL AUTO_INCREMENT,
+  `user_id` bigint(20) unsigned DEFAULT NULL,
+  `endpoint` varchar(500) NOT NULL,
+  `endpoint_hash` char(64) NOT NULL,
+  `public_key` varchar(255) DEFAULT NULL,
+  `auth_token` varchar(255) DEFAULT NULL,
+  `content_encoding` varchar(255) DEFAULT NULL,
+  `created_at` timestamp NULL DEFAULT NULL,
+  `updated_at` timestamp NULL DEFAULT NULL,
+  `p256dh` text DEFAULT NULL,
+  `auth` text DEFAULT NULL,
+  `device` varchar(64) DEFAULT NULL,
+  `user_agent` text DEFAULT NULL,
+  `last_used_at` timestamp NULL DEFAULT NULL,
+  `device_hint` varchar(255) DEFAULT NULL,
+  `last_seen_at` timestamp NULL DEFAULT NULL,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `push_subscriptions_endpoint_unique` (`endpoint`),
+  UNIQUE KEY `push_user_endpoint_unique` (`user_id`,`endpoint`),
+  UNIQUE KEY `ps_user_hash_unique` (`user_id`,`endpoint_hash`),
+  KEY `push_subscriptions_user_id_index` (`user_id`),
+  KEY `push_subscriptions_last_used_at_index` (`last_used_at`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+/*!40101 SET character_set_client = @saved_cs_client */;
 DROP TABLE IF EXISTS `remind_tasks`;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
 /*!40101 SET character_set_client = utf8 */;
-
 CREATE TABLE `remind_tasks` (
   `id` bigint(20) unsigned NOT NULL AUTO_INCREMENT,
   `habit_log_id` bigint(20) unsigned DEFAULT NULL,
@@ -264,26 +254,23 @@ CREATE TABLE `remind_tasks` (
   `created_at` timestamp NULL DEFAULT NULL,
   `updated_at` timestamp NULL DEFAULT NULL,
   PRIMARY KEY (`id`),
-  UNIQUE KEY `uq_remind_tasks_habit_log_remind_at` (`habit_log_id`,`remind_at`),
+  UNIQUE KEY `remind_tasks_time_unique` (`habit_time_id`,`remind_at`),
   KEY `remind_tasks_status_remind_at_index` (`status`,`remind_at`),
   KEY `remind_tasks_habit_log_id_index` (`habit_log_id`),
-  KEY `remind_tasks_habit_time_id_index` (`habit_time_id`),
   KEY `remind_tasks_parent_task_id_index` (`parent_task_id`),
-  KEY `remind_tasks_root_task_id_index` (`root_task_id`),
-  KEY `remind_tasks_claim_token_index` (`claim_token`),
-  KEY `remind_tasks_updated_at_index` (`updated_at`),
+  KEY `rt_status_remind_at_idx` (`status`,`remind_at`),
+  KEY `rt_parent_idx` (`parent_task_id`),
+  KEY `rt_root_idx` (`root_task_id`),
+  KEY `rt_claim_token_idx` (`claim_token`),
+  KEY `rt_habit_log_idx` (`habit_log_id`),
+  KEY `rt_habit_time_idx` (`habit_time_id`),
   CONSTRAINT `remind_tasks_habit_log_id_foreign` FOREIGN KEY (`habit_log_id`) REFERENCES `habit_logs` (`id`) ON DELETE CASCADE,
-  CONSTRAINT `remind_tasks_habit_time_id_foreign` FOREIGN KEY (`habit_time_id`) REFERENCES `habit_times` (`id`) ON DELETE CASCADE,
-  CONSTRAINT `remind_tasks_parent_task_id_foreign` FOREIGN KEY (`parent_task_id`) REFERENCES `remind_tasks` (`id`) ON DELETE SET NULL,
-  CONSTRAINT `remind_tasks_root_task_id_foreign` FOREIGN KEY (`root_task_id`) REFERENCES `remind_tasks` (`id`) ON DELETE SET NULL
+  CONSTRAINT `remind_tasks_parent_task_id_foreign` FOREIGN KEY (`parent_task_id`) REFERENCES `remind_tasks` (`id`) ON DELETE SET NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-
 /*!40101 SET character_set_client = @saved_cs_client */;
-
 DROP TABLE IF EXISTS `users`;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
 /*!40101 SET character_set_client = utf8 */;
-
 CREATE TABLE `users` (
   `id` bigint(20) unsigned NOT NULL AUTO_INCREMENT,
   `name` varchar(255) NOT NULL,
@@ -300,10 +287,9 @@ CREATE TABLE `users` (
   PRIMARY KEY (`id`),
   UNIQUE KEY `users_email_unique` (`email`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-
 /*!40101 SET character_set_client = @saved_cs_client */;
-
 /*!40103 SET TIME_ZONE=@OLD_TIME_ZONE */;
+
 /*!40101 SET SQL_MODE=@OLD_SQL_MODE */;
 /*!40014 SET FOREIGN_KEY_CHECKS=@OLD_FOREIGN_KEY_CHECKS */;
 /*!40014 SET UNIQUE_CHECKS=@OLD_UNIQUE_CHECKS */;
@@ -350,3 +336,11 @@ INSERT INTO `migrations` (`id`, `migration`, `batch`) VALUES (38,'2025_12_04_062
 INSERT INTO `migrations` (`id`, `migration`, `batch`) VALUES (39,'2025_12_23_102618_drop_legacy_unique_on_habit_logs',7);
 INSERT INTO `migrations` (`id`, `migration`, `batch`) VALUES (40,'2025_12_26_103624_change_habit_logs_unique_to_user_habit_time_date',8);
 INSERT INTO `migrations` (`id`, `migration`, `batch`) VALUES (41,'2026_01_06_134906_make_habit_time_id_not_nullable_on_habit_logs',9);
+INSERT INTO `migrations` (`id`, `migration`, `batch`) VALUES (42,'2026_01_13_113923_fix_remind_at_column_on_remind_tasks',10);
+INSERT INTO `migrations` (`id`, `migration`, `batch`) VALUES (43,'2026_01_13_142042_improve_remind_tasks_for_production',11);
+INSERT INTO `migrations` (`id`, `migration`, `batch`) VALUES (44,'2026_01_15_140014_remind_tasks_add_habit_time_id',12);
+INSERT INTO `migrations` (`id`, `migration`, `batch`) VALUES (45,'2026_01_17_111120_add_attempts_to_remind_tasks_table',13);
+INSERT INTO `migrations` (`id`, `migration`, `batch`) VALUES (46,'2026_01_01_000000_create_remind_tasks_table',14);
+INSERT INTO `migrations` (`id`, `migration`, `batch`) VALUES (47,'2026_01_26_145103_create_remind_tasks_table',14);
+INSERT INTO `migrations` (`id`, `migration`, `batch`) VALUES (48,'2026_02_04_101919_enforce_unique_remind_tasks_time',15);
+INSERT INTO `migrations` (`id`, `migration`, `batch`) VALUES (49,'2026_02_09_160558_adopt_push_subscriptions_table',16);

@@ -1,38 +1,62 @@
-/* public/sw.js */
+// public/sw.js
+// bump: 2026-02-09
 
 /**
  * Push受信SW（運用寄り / “アプリ内は遷移しない” 方針）
  * - 通知表示（notification.data は最小限のホワイトリストだけ保持 + 文字列上限で安全弁）
  * - 通知クリック:
- *    - ★既存タブがあれば「/today限定にせず」そのタブを focus して postMessage（REMINDER_CLICK）
- *      - つまり week / settings 等に居ても “勝手に /today へ飛ばさない”
- *      - 二重発火・URL汚染を避けるため、タブがある場合は navigate/openWindow をしない
+ *    - 既存タブがあれば focus して postMessage（REMINDER_CLICK）
+ *      - week / settings 等に居ても “勝手に /today へ飛ばさない”
+ *      - タブがある場合は navigate/openWindow をしない
  *    - タブが無ければ /today?from=push&task_id=... を openWindow（到達保証）
  *
- * 重要:
- * - payload.url / data.url はナビゲーションに使わない（常に /today?from=push... を起点にする）
- * - payload の title/body が巨大でも落ちないよう、notification.data の文字列は上限で切る
- *
  * Update policy (運用安定優先):
- * - ★自動 skipWaiting をしない（デプロイ中の “途中乗っ取り” を避ける）
- * - 更新を即時反映したい場合だけ、window 側から waiting SW に
- *   reg.waiting.postMessage({type:"SKIP_WAITING"}) を送る
+ * - ★自動 skipWaiting しない
+ * - ★clients.claim() も自動ではしない（切替の瞬間だけ operator が明示的に実行）
+ *   => 更新を即時反映したい場合だけ、window 側から waiting SW に
+ *      reg.waiting.postMessage({type:"SKIP_WAITING"}) を送る
+ *      controllerchange 後に controllerへ postMessage({type:"CLAIM_CLIENTS"}) を送る
  */
+
+const SW_VERSION = "2026-02-09";
+
+// claimを「デフォルトOFF」にして、明示指示でだけONにする
+const CLAIM_DEFAULT = false;
 
 self.addEventListener("install", (event) => {
     // ★自動で skipWaiting しない（安全な段階的更新）
-    // ここでは特に何もしないが、拡張用に waitUntil を残す
     event.waitUntil(Promise.resolve());
 });
 
 self.addEventListener("activate", (event) => {
-    // 有効化された世代がタブを支配できるようにする（これは維持）
-    event.waitUntil(self.clients.claim());
+    // ★自動 claim しない（B対策）
+    if (CLAIM_DEFAULT) {
+        event.waitUntil(self.clients.claim());
+    } else {
+        event.waitUntil(Promise.resolve());
+    }
 });
 
 self.addEventListener("message", (event) => {
+    // --- debug: version ping ---
+    if (event?.data?.type === "PING_VERSION") {
+        event?.source?.postMessage({
+            type: "PONG_VERSION",
+            version: SW_VERSION,
+        });
+        return;
+    }
+
+    // --- operator-controlled rollout ---
     if (event?.data?.type === "SKIP_WAITING") {
         self.skipWaiting();
+        return;
+    }
+
+    // ★切替操作の「最後」にだけ claim を実行
+    if (event?.data?.type === "CLAIM_CLIENTS") {
+        event.waitUntil(self.clients.claim());
+        return;
     }
 });
 
@@ -69,8 +93,6 @@ function buildFallbackPath(taskId) {
 
 /**
  * Same-origin only URL resolver.
- * - Accepts absolute or relative URLs but forces same-origin
- * - Falls back to fallbackPath (same-origin) if invalid or cross-origin
  */
 function toSameOriginUrl(origin, urlOrPath, fallbackPath) {
     const fallback = new URL(fallbackPath || "/today?from=push", origin);
@@ -92,8 +114,6 @@ function normalizePayload(input) {
 
 /**
  * notification.data を最小限にホワイトリスト化
- * - url は「常に /today?from=push...」の openUrl を格納（payload.url は格納しない）
- * - 文字列は上限で切って、異常サイズでも落ちないようにする
  */
 function sanitizeNotificationData(payload, openUrl, taskId) {
     return {
@@ -107,7 +127,7 @@ function sanitizeNotificationData(payload, openUrl, taskId) {
         evaluation_type: toStrOrNull(
             clampStr(payload.evaluation_type ?? "", LIMITS.evaluation_type),
         ),
-        url: openUrl, // ★保持はするが、クリック時ナビには使わない
+        url: openUrl,
     };
 }
 
@@ -121,9 +141,6 @@ function isSameOriginWindowClient(origin, client) {
 
 /**
  * “アプリタブ” 判定（安全側）
- * - same-origin の window client だけ対象
- * - /login, /register は “アプリタブ” とみなさない（勝手にモーダル出すのが微妙なので）
- * - それ以外は「アプリが動いているタブ」として扱う
  */
 function isAppClient(origin, clientUrl) {
     try {
@@ -132,8 +149,6 @@ function isAppClient(origin, clientUrl) {
 
         const p = u.pathname || "/";
         if (p === "/login" || p === "/register") return false;
-
-        // SPA配下は基本OK（/today /week /settings/... など）
         return true;
     } catch (e) {
         return false;
@@ -142,8 +157,6 @@ function isAppClient(origin, clientUrl) {
 
 /**
  * Push: json() を試して、失敗したら text() fallback（★必ず await）
- * - Promise 混入を防ぎ、options.body を常に string に寄せる
- * - さらに options.data の文字列も上限で切って、異常サイズでの事故を抑止
  */
 self.addEventListener("push", (event) => {
     event.waitUntil(
@@ -159,10 +172,7 @@ self.addEventListener("push", (event) => {
                 } catch (_) {
                     textBody = "";
                 }
-                payload = {
-                    title: "Habit Tracker",
-                    body: textBody,
-                };
+                payload = { title: "Habit Tracker", body: textBody };
             }
 
             payload = normalizePayload(payload);
@@ -180,7 +190,6 @@ self.addEventListener("push", (event) => {
             const origin = self.location.origin;
             const fallbackPath = buildFallbackPath(taskId);
 
-            // ★重要: クリック遷移用の openUrl は常に /today?from=push... を起点に固定
             const openUrl = toSameOriginUrl(origin, fallbackPath, fallbackPath);
 
             const options = {
@@ -190,8 +199,6 @@ self.addEventListener("push", (event) => {
                     openUrl,
                     taskId,
                 ),
-                // tag を付けたいならここ
-                // tag: taskId != null ? `reminder-${taskId}` : "reminder",
             };
 
             await self.registration.showNotification(title, options);
@@ -214,10 +221,8 @@ self.addEventListener("notificationclick", (event) => {
             const taskId = pickTaskId(data);
             const fallbackPath = buildFallbackPath(taskId);
 
-            // ★重要: data.url も信用しない。常に /today?from=push... に固定
             const openUrl = toSameOriginUrl(origin, fallbackPath, fallbackPath);
 
-            // クライアント探索
             const clientList = await self.clients.matchAll({
                 type: "window",
                 includeUncontrolled: true,
@@ -227,7 +232,6 @@ self.addEventListener("notificationclick", (event) => {
                 isSameOriginWindowClient(origin, c),
             );
 
-            // ★最優先: “アプリが開いてるタブ” があれば、そこを使う（/today限定にしない）
             const appClient = sameOriginClients.find((c) =>
                 isAppClient(origin, c.url),
             );
@@ -237,7 +241,6 @@ self.addEventListener("notificationclick", (event) => {
                     await appClient.focus();
                 } catch (_) {}
 
-                // ★タブがある場合は “遷移しない”。モーダルを開くだけ。
                 try {
                     appClient.postMessage({
                         type: "REMINDER_CLICK",
@@ -249,7 +252,6 @@ self.addEventListener("notificationclick", (event) => {
                 return;
             }
 
-            // ★タブが無い場合のみ openWindow（到達保証）
             try {
                 await self.clients.openWindow(openUrl);
             } catch (_) {}

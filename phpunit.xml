@@ -6,27 +6,38 @@
 >
     <testsuites>
         <testsuite name="Unit">
-            <directory suffix="Test.php">./tests/Unit</directory>
+            <directory>tests/Unit</directory>
         </testsuite>
-
         <testsuite name="Feature">
-            <directory suffix="Test.php">./tests/Feature</directory>
-
-            <!-- v3方針: Breeze(Web UI)は使わないので、Breeze付属テスト群は除外 -->
-            <exclude>./tests/Feature/Auth/PasswordConfirmationTest.php</exclude>
-            <exclude>./tests/Feature/Auth/PasswordUpdateTest.php</exclude>
-            <exclude>./tests/Feature/ProfileTest.php</exclude>
+            <directory>tests/Feature</directory>
         </testsuite>
     </testsuites>
 
+    <source>
+        <include>
+            <directory>app</directory>
+        </include>
+    </source>
+
     <php>
+        <!-- Laravel の testing 環境に寄せる -->
         <env name="APP_ENV" value="testing"/>
+        <env name="APP_MAINTENANCE_DRIVER" value="file"/>
+
+        <!-- テスト高速化・副作用抑止 -->
         <env name="BCRYPT_ROUNDS" value="4"/>
-        <env name="CACHE_DRIVER" value="array"/>
-        <env name="DB_CONNECTION" value="testing"/>
+        <env name="BROADCAST_CONNECTION" value="null"/>
+        <env name="CACHE_STORE" value="array"/>
         <env name="MAIL_MAILER" value="array"/>
         <env name="QUEUE_CONNECTION" value="sync"/>
         <env name="SESSION_DRIVER" value="array"/>
+
+        <!-- 観測系OFF -->
+        <env name="PULSE_ENABLED" value="false"/>
         <env name="TELESCOPE_ENABLED" value="false"/>
+        <env name="NIGHTWATCH_ENABLED" value="false"/>
+
+        <!-- 重要：DBは .env.testing に任せる（ここで sqlite を強制しない） -->
+        <!-- DB_CONNECTION / DB_DATABASE は書かない -->
     </php>
 </phpunit>

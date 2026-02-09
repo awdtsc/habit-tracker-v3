@@ -221,17 +221,50 @@ async function postJson(url, bodyObj) {
   });
 }
 
+async function getJson(url) {
+  const xsrf = getCookie("XSRF-TOKEN");
+  const headers = {
+    Accept: "application/json",
+    "X-Requested-With": "XMLHttpRequest",
+    ...(xsrf ? { "X-XSRF-TOKEN": decodeURIComponent(xsrf) } : {}),
+  };
+
+  return await fetchJson(url, {
+    method: "GET",
+    credentials: "same-origin",
+    headers,
+  });
+}
+
 async function doSubscribe() {
   if (busy.value) return;
   busy.value = true;
   logs.value = [];
 
   try {
-    const key = import.meta.env.VITE_VAPID_PUBLIC_KEY;
-    vapidOk.value = !!key;
-    if (!key) {
+    const frontendKey = import.meta.env.VITE_VAPID_PUBLIC_KEY;
+    vapidOk.value = !!frontendKey;
+    if (!frontendKey) {
       log("[fatal] Missing VITE_VAPID_PUBLIC_KEY in .env");
       throw new Error("Missing VITE_VAPID_PUBLIC_KEY in .env");
+    }
+
+    // 先にCSRF+認証（401/419を分かりやすく）
+    await ensureCsrfCookie();
+    await apiGetMe();
+    if (!authOk.value) {
+      log("[subscribe blocked]", "Not authenticated. Please login first.");
+      throw new Error("Not authenticated. Please login first.");
+    }
+
+    // ★VAPIDパリティ（backendと一致しないなら購読を止める）
+    const backendVapid = await getJson("/api/v1/push/vapid-public");
+    const backendKey = String(backendVapid?.public_key || "");
+    if (!backendKey) {
+      throw new Error("Backend VAPID public key is missing.");
+    }
+    if (backendKey !== String(frontendKey)) {
+      throw new Error("VAPID key mismatch between frontend and backend.");
     }
 
     // ★ SW登録/ready を「絶対に理由つきでUIへ」出す
@@ -252,20 +285,13 @@ async function doSubscribe() {
 
     await ensurePermission();
 
-    await ensureCsrfCookie();
-    await apiGetMe();
-    if (!authOk.value) {
-      log("[subscribe blocked]", "Not authenticated. Please login first.");
-      throw new Error("Not authenticated. Please login first.");
-    }
-
     // 既存を再利用（重複防止）
     const existing = await reg.pushManager.getSubscription();
     const sub =
       existing ||
       (await reg.pushManager.subscribe({
         userVisibleOnly: true,
-        applicationServerKey: urlBase64ToUint8Array(key),
+        applicationServerKey: urlBase64ToUint8Array(frontendKey),
       }));
 
     log("[ok] subscribed in browser");
@@ -275,7 +301,6 @@ async function doSubscribe() {
 
     await refreshState();
   } catch (e) {
-    // ここにも必ず落とす（上でUIに出してても二重で残るだけ）
     log("[subscribe error]", String(e?.message ?? e));
   } finally {
     busy.value = false;

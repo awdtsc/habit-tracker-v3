@@ -94,6 +94,34 @@ class PushSubscriptionController extends Controller
         ], 200);
     }
 
+    /**
+     * Backend VAPID public key for parity check.
+     * - auth必須（運用情報なので一応隠す）
+     * - 無い場合は 503
+     */
+    public function vapidPublic(Request $request)
+    {
+        $user = $request->user();
+        if (!$user) {
+            return response()->json(['message' => 'Unauthenticated.'], 401);
+        }
+
+        $cfg = config('webpush.vapid');
+        $pub = (string) ($cfg['public_key'] ?? '');
+
+        if ($pub === '') {
+            return response()->json([
+                'ok' => false,
+                'message' => 'Missing backend VAPID public key',
+            ], 503);
+        }
+
+        return response()->json([
+            'ok' => true,
+            'public_key' => $pub,
+        ], 200);
+    }
+
     public function test(Request $request)
     {
         if (app()->environment('production')) {
@@ -119,7 +147,19 @@ class PushSubscriptionController extends Controller
                 'failed' => 0,
                 'removed' => 0,
                 'errors' => [['reason' => 'Missing VAPID keys']],
-            ], 200);
+            ], 503);
+        }
+
+        // stale cleanup (運用安全弁): 30日見てない購読は削除
+        try {
+            PushSubscription::query()
+                ->where('user_id', $user->id)
+                ->whereNotNull('last_seen_at')
+                ->where('last_seen_at', '<', now()->subDays(30))
+                ->delete();
+        } catch (\Throwable $e) {
+            // cleanup失敗は致命ではないので継続（ただしログ）
+            Log::warning('push/test stale cleanup failed', ['e' => $e->getMessage()]);
         }
 
         $subs = PushSubscription::query()
@@ -189,7 +229,7 @@ class PushSubscriptionController extends Controller
                     ? (string) $report->getEndpoint()
                     : '';
 
-                // ★重要: DBと同一のハッシュ関数で統一
+                // ★DBと同一のハッシュ関数で統一
                 $endpointHash = $endpoint !== ''
                     ? PushSubscription::hashEndpoint($endpoint)
                     : null;
@@ -200,6 +240,7 @@ class PushSubscriptionController extends Controller
                     'reason' => $reason,
                 ];
 
+                // 無効購読の掃除（push service 由来の確定パターン）
                 if ($endpointHash && ($statusCode === 404 || $statusCode === 410)) {
                     $deleted = PushSubscription::query()
                         ->where('user_id', $user->id)
@@ -217,16 +258,18 @@ class PushSubscriptionController extends Controller
                 'failed' => 1,
                 'removed' => 0,
                 'errors' => [['reason' => $e->getMessage()]],
-            ], 200);
+            ], 502);
         }
 
+        $ok = ($failed === 0);
+
         return response()->json([
-            'ok' => true,
+            'ok' => $ok,
             'sent' => $sent,
             'failed' => $failed,
             'removed' => $removed,
             'errors' => $errors,
-        ], 200);
+        ], $ok ? 200 : 207);
     }
 
     protected function makeWebPush()

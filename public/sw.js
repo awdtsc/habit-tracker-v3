@@ -12,14 +12,28 @@
  * 重要:
  * - payload.url / data.url はナビゲーションに使わない（常に /today?from=push... を起点にする）
  * - payload の title/body が巨大でも落ちないよう、notification.data の文字列は上限で切る
+ *
+ * Update policy (運用安定優先):
+ * - ★自動 skipWaiting をしない（デプロイ中の “途中乗っ取り” を避ける）
+ * - 更新を即時反映したい場合だけ、window 側から waiting SW に
+ *   reg.waiting.postMessage({type:"SKIP_WAITING"}) を送る
  */
 
-self.addEventListener("install", () => {
-    self.skipWaiting();
+self.addEventListener("install", (event) => {
+    // ★自動で skipWaiting しない（安全な段階的更新）
+    // ここでは特に何もしないが、拡張用に waitUntil を残す
+    event.waitUntil(Promise.resolve());
 });
 
 self.addEventListener("activate", (event) => {
+    // 有効化された世代がタブを支配できるようにする（これは維持）
     event.waitUntil(self.clients.claim());
+});
+
+self.addEventListener("message", (event) => {
+    if (event?.data?.type === "SKIP_WAITING") {
+        self.skipWaiting();
+    }
 });
 
 // ===== size guard (運用安全弁) =====

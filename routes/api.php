@@ -105,17 +105,19 @@ Route::prefix('v1')->group(function () {
         | - 購読（subscribe）: ブラウザの PushSubscription を DB へ保存
         | - 解除（unsubscribe）: DB とブラウザ側の購読を解除
         | - テスト送信（test）: 運用時の疎通確認（※本番では無効化するのが安全）
+        | - VAPID公開鍵（vapid-public）: フロントとのキー不一致を検知する
         |
         | 運用事故防止:
         | - 認証済みユーザーでも連打/悪用で負荷を出せるため
         |   最低限の rate limit を付与する
         |
         | throttle 例:
-        | - subscribe/unsubscribe: 30 req / 1 min（通常運用では十分）
-        | - test: 10 req / 1 min（スパム/負荷/通知爆撃を抑止）
+        | - subscribe/unsubscribe/vapid-public: 30 req / 1 min
+        | - test: 10 req / 1 min
         */
         Route::post('/push/subscribe',   [PushSubscriptionController::class, 'subscribe'])->middleware('throttle:30,1');
         Route::post('/push/unsubscribe', [PushSubscriptionController::class, 'unsubscribe'])->middleware('throttle:30,1');
         Route::post('/push/test',        [PushSubscriptionController::class, 'test'])->middleware('throttle:10,1');
+        Route::get('/push/vapid-public', [PushSubscriptionController::class, 'vapidPublic'])->middleware('throttle:30,1');
     });
 });

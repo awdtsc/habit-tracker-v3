@@ -85,6 +85,59 @@ class WebPushService
         $removed = 0;
         $failures = [];
 
+        // ---------------------------------------------------------------------
+        // ★stale prune（bounded / user-scoped）
+        // - config(webpush.stale_prune_days) が >0 のときだけ実行
+        // - last_seen_at が古い購読を最大500件まで削除（古い順）
+        // - 失敗しても送信結果に影響させない（運用可用性優先）
+        // ---------------------------------------------------------------------
+        $stalePruneDays = (int) config('webpush.stale_prune_days', 0);
+        if ($stalePruneDays > 0) {
+            try {
+                $cutoff = now()->subDays($stalePruneDays);
+
+                $staleIds = PushSubscription::query()
+                    ->where('user_id', $userId)
+                    ->whereNotNull('last_seen_at')
+                    ->where('last_seen_at', '<', $cutoff)
+                    ->orderBy('last_seen_at')
+                    ->limit(500)
+                    ->pluck('id')
+                    ->all();
+
+                if (!empty($staleIds)) {
+                    $removedNow = PushSubscription::query()
+                        ->where('user_id', $userId)
+                        ->whereIn('id', $staleIds)
+                        ->delete();
+
+                    $removed += (int) $removedNow;
+                }
+            } catch (\Throwable $e) {
+                // ※ここで failures に入れると「送信失敗」と誤認し得るので入れない
+                // 必要なら logger()->warning('stale_prune_failed: '.$this->safeReason($e->getMessage()));
+            }
+
+            // prune 後に取り直す（購読が全消えしてたらここで終わる）
+            $subs = PushSubscription::query()
+                ->where('user_id', $userId)
+                ->orderByDesc('last_seen_at')
+                ->get();
+
+            if ($subs->isEmpty()) {
+                return [
+                    'ok' => false,
+                    'queued' => 0,
+                    'sent' => 0,
+                    'failed' => 0,
+                    'skipped' => 0,
+                    'removed' => $removed,
+                    'message' => 'No subscriptions',
+                    'failures' => [],
+                ];
+            }
+        }
+
         try {
             $webPush = new WebPush(['VAPID' => $vapid]);
 

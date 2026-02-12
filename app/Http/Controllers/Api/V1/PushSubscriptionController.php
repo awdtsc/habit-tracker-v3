@@ -124,18 +124,20 @@ class PushSubscriptionController extends Controller
             'endpoint' => ['required', 'string', 'max:500'],
         ]);
 
-        $endpoint = $data['endpoint'];
+        // subscribe/save 側と同じ正規化（trim）を適用してミスマッチ削減
+        $endpoint = trim((string) $data['endpoint']);
+        if ($endpoint === '') {
+            return response()->json(['ok' => false, 'message' => 'Invalid endpoint.'], 422);
+        }
 
-        // 方針A: endpoint は全ユーザーで一意だが、
-        // 解除は「自分のものだけ」削除（安全）
         $deleted = PushSubscription::query()
-            ->where('user_id', $user->id)
+            ->where('user_id', (int) $user->id)
             ->where('endpoint', $endpoint)
             ->delete();
 
         return response()->json([
             'ok' => true,
-            'deleted' => $deleted,
+            'deleted' => (int) $deleted,
         ], 200);
     }
 

@@ -20,6 +20,27 @@ class ReminderTaskSender
     ) {}
 
     /**
+     * WebPushService の結果が「購読ゼロで送れない」を示しているか判定する
+     * - ここが retry されると queue が膨らむので terminal skip に落とす
+     */
+    private function isNoSubscriptionsResult(array $res): bool
+    {
+        $msg = (string)($res['message'] ?? '');
+        if ($msg !== '' && stripos($msg, 'no subscriptions') !== false) {
+            return true;
+        }
+
+        // 防御的: 明示メッセージが無い場合でも「送信対象ゼロ」っぽい形を弾く
+        $ok = !empty($res['ok']);
+        $queued = (int)($res['queued'] ?? 0);
+        $sent = (int)($res['sent'] ?? 0);
+        $failed = (int)($res['failed'] ?? 0);
+        $removed = (int)($res['removed'] ?? 0);
+
+        return (!$ok && $queued === 0 && $sent === 0 && $failed === 0 && $removed === 0);
+    }
+
+    /**
      * @param array<string,bool> $doneSet  key: "{user_id}:{habit_time_id}"
      * @return array{sent:int, skipped:int, error:int}
      */
@@ -209,6 +230,25 @@ class ReminderTaskSender
             return [$sent, $skipped, $error];
         }
 
+        // ★購読ゼロは「失敗」ではない（retry/requeueしない）
+        if ($this->isNoSubscriptionsResult($res)) {
+            $now = $this->policy->now();
+            $errStr = $this->payloads->errStr($res);
+
+            foreach ($owned as $t) {
+                $this->repo->mark((int)$t->id, $token, [
+                    'status' => 'skipped',
+                    'last_error' => 'no_subscriptions: ' . $errStr,
+                    'claim_token' => null,
+                    'updated_at' => $now,
+                ]);
+                $skipped++;
+            }
+
+            if ($debug && $console) $console->line("digest skipped (no subscriptions) user={$uid} tasks=" . count($owned));
+            return [$sent, $skipped, $error];
+        }
+
         // digest failed → 個別 requeue/error
         $errStr = $this->payloads->errStr($res);
         foreach ($owned as $t) {
@@ -294,6 +334,23 @@ class ReminderTaskSender
                 $rootId = $t->root_task_id ? (int)$t->root_task_id : (int)$t->id;
                 $this->repo->cancelPendingByRoot($rootId, $now);
 
+                return [$sent, $skipped, $error];
+            }
+
+            // ★購読ゼロは「失敗」ではない（retry/requeueしない）
+            if ($this->isNoSubscriptionsResult($res)) {
+                $now = $this->policy->now();
+                $errStr = $this->payloads->errStr($res);
+
+                $this->repo->mark((int)$t->id, $token, [
+                    'status' => 'skipped',
+                    'last_error' => 'no_subscriptions: ' . $errStr,
+                    'claim_token' => null,
+                    'updated_at' => $now,
+                ]);
+                $skipped++;
+
+                if ($debug && $console) $console->line("task {$t->id} skipped (no subscriptions)");
                 return [$sent, $skipped, $error];
             }
 

@@ -18,13 +18,14 @@ export default defineConfig({
         }),
     ],
 
-    // ★ここが重要：IPv6([::1])に寄らないよう 127.0.0.1 に固定
+    // ★重要：Laravel( http://localhost:8000 ) と揃える
+    // - 127.0.0.1 / localhost を混ぜると別オリジンになって CORS/HMR が壊れる
     server: {
-        host: "127.0.0.1",
+        host: "localhost",
         port: 5173,
         strictPort: true,
         hmr: {
-            host: "127.0.0.1",
+            host: "localhost",
             port: 5173,
         },
     },

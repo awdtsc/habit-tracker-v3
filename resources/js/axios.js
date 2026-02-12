@@ -155,7 +155,7 @@ api.interceptors.request.use(
         }
         return config;
     },
-    (error) => Promise.reject(error)
+    (error) => Promise.reject(error),
 );
 
 // ------------------------------------------------------------
@@ -194,7 +194,7 @@ api.interceptors.response.use(
             const redirect = window.location.pathname + window.location.search;
 
             console.warn(
-                `[axios] 401 (req:${requestPath}) -> clear token and redirect to /login`
+                `[axios] 401 (req:${requestPath}) -> clear token and redirect to /login`,
             );
 
             redirecting = true;
@@ -205,7 +205,7 @@ api.interceptors.response.use(
         }
 
         return Promise.reject(error);
-    }
+    },
 );
 
 // ============================================================================
@@ -216,11 +216,13 @@ function assertCookieModeEnabled(fnName) {
     if (COOKIE_AUTH_ENABLED) return;
     // 設定ミスを “419で気づく” より “即気づく” ほうが安全
     const msg = `[axios] ${fnName}() was called but COOKIE_AUTH_ENABLED is false. Set VITE_COOKIE_AUTH=true for browser cookie auth.`;
-    // throw は呼び出し元で catch できる（Login/Register で alert 等に落とせる）
     throw new Error(msg);
 }
 
-async function ensureCsrfCookie() {
+/**
+ * 外からも使えるように export（Notifications.vue 等で POST 前に呼べる）
+ */
+export async function ensureCsrfCookie() {
     assertCookieModeEnabled("ensureCsrfCookie");
     await initCsrf();
 }
@@ -238,7 +240,7 @@ export async function cookieLogin({ email, password }) {
                 "X-Requested-With": "XMLHttpRequest",
                 Accept: "application/json",
             },
-        }
+        },
     );
     return res.data;
 }
@@ -256,7 +258,7 @@ export async function cookieRegister({ name, email, password }) {
                 "X-Requested-With": "XMLHttpRequest",
                 Accept: "application/json",
             },
-        }
+        },
     );
     return res.data;
 }
@@ -286,6 +288,69 @@ export async function cookieLogout() {
         },
     });
     return res.data;
+}
+
+// ============================================================================
+// Unified JSON helpers (2-β向け：Subscribe/Unsubscribe/Test をUIで扱いやすく）
+// - 失敗時は「投げる」(throw) けど、throwする中身を整形して UI でそのまま表示可能にする
+// ============================================================================
+
+function buildApiError(err, fallbackMessage = "Request failed.") {
+    const status = err?.response?.status ?? 0;
+    const data = err?.response?.data;
+
+    const message =
+        (data && typeof data === "object" && (data.message || data.error)) ||
+        (typeof data === "string" ? data : "") ||
+        err?.message ||
+        fallbackMessage;
+
+    const code =
+        data && typeof data === "object" && data.code
+            ? String(data.code)
+            : null;
+
+    return {
+        ok: false,
+        status,
+        code,
+        message: String(message),
+        data,
+    };
+}
+
+export async function getJson(url, config = {}) {
+    try {
+        const res = await api.get(url, config);
+        return res.data;
+    } catch (e) {
+        throw buildApiError(e, "GET request failed.");
+    }
+}
+
+export async function postJson(url, payload = {}, config = {}) {
+    try {
+        // SPA（Cookie認証）で POST する前はCSRFを確実に取る
+        if (COOKIE_AUTH_ENABLED) {
+            await ensureCsrfCookie();
+        }
+        const res = await api.post(url, payload, config);
+        return res.data;
+    } catch (e) {
+        throw buildApiError(e, "POST request failed.");
+    }
+}
+
+export async function deleteJson(url, config = {}) {
+    try {
+        if (COOKIE_AUTH_ENABLED) {
+            await ensureCsrfCookie();
+        }
+        const res = await api.delete(url, config);
+        return res.data;
+    } catch (e) {
+        throw buildApiError(e, "DELETE request failed.");
+    }
 }
 
 export default api;

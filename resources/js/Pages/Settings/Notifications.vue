@@ -68,7 +68,7 @@
         </ol>
       </div>
       <div class="text-xs text-gray-500 leading-relaxed">
-        ※ 419(Page Expired) が出る場合は CSRF cookie が未取得です。ここでは自動で /sanctum/csrf-cookie を取得します。<br />
+        ※ 419(Page Expired) が出る場合は CSRF cookie が未取得です（axios.js 側で自動取得します）。<br />
         ※ 401 が出る場合は未ログインです（/today 等でログインしてから戻ってきてください）。<br />
         ※ 「購読できない」場合、ここに必ず原因（SW登録/ready/権限/認証等）が表示されます。
       </div>
@@ -84,6 +84,7 @@
 <script setup>
 import { ref, onMounted } from "vue";
 import { ensureServiceWorkerRegistered, requestWaitingSwActivation } from "@/registerSw";
+import { getJson, postJson } from "@/axios";
 
 const permission = ref(typeof Notification !== "undefined" ? Notification.permission : "unsupported");
 const swScope = ref("");
@@ -110,13 +111,6 @@ function formatSwFailure(sw) {
       ? ` detail=${JSON.stringify(sw.detail)}`
       : "";
   return head + detailMsg;
-}
-
-function getCookie(name) {
-  return document.cookie
-    .split("; ")
-    .find((row) => row.startsWith(name + "="))
-    ?.split("=")[1];
 }
 
 function urlBase64ToUint8Array(base64String) {
@@ -153,37 +147,13 @@ async function ensurePermission() {
   if (p !== "granted") throw new Error("permission not granted");
 }
 
-async function ensureCsrfCookie() {
-  const res = await fetch("/sanctum/csrf-cookie", { credentials: "same-origin" });
-  log("[csrf-cookie]", res.status);
-  if (!res.ok) throw new Error("csrf-cookie failed: " + res.status);
-}
-
-async function fetchJson(url, init) {
-  const res = await fetch(url, init);
-  const text = await res.text();
-  const ct = res.headers.get("content-type") || "";
-  if (!res.ok) throw new Error(`${url} failed: ${res.status} ${text.slice(0, 300)}`);
-  if (!ct.includes("application/json")) {
-    throw new Error(`${url} unexpected content-type: ${ct} body=${text.slice(0, 200)}`);
-  }
-  return JSON.parse(text);
-}
-
 async function apiGetMe() {
-  const xsrf = getCookie("XSRF-TOKEN");
-  const headers = {
-    Accept: "application/json",
-    "X-Requested-With": "XMLHttpRequest",
-    ...(xsrf ? { "X-XSRF-TOKEN": decodeURIComponent(xsrf) } : {}),
-  };
-
   try {
-    await fetchJson("/api/v1/auth/me", { method: "GET", credentials: "same-origin", headers });
+    await getJson("/auth/me"); // baseURL=/api/v1
     authOk.value = true;
   } catch (e) {
     authOk.value = false;
-    log("[auth/me]", String(e?.message ?? e));
+    log("[auth/me]", e?.message || e);
   }
 }
 
@@ -209,42 +179,10 @@ async function refreshState() {
     const sub = await reg.pushManager.getSubscription();
     hasSub.value = !!sub;
   } catch (e) {
-    log("[refresh error]", String(e?.message ?? e));
+    log("[refresh error]", e?.message || e);
   } finally {
     await apiGetMe();
   }
-}
-
-async function postJson(url, bodyObj) {
-  const xsrf = getCookie("XSRF-TOKEN");
-  const headers = {
-    "Content-Type": "application/json",
-    Accept: "application/json",
-    "X-Requested-With": "XMLHttpRequest",
-    ...(xsrf ? { "X-XSRF-TOKEN": decodeURIComponent(xsrf) } : {}),
-  };
-
-  return await fetchJson(url, {
-    method: "POST",
-    credentials: "same-origin",
-    headers,
-    body: JSON.stringify(bodyObj),
-  });
-}
-
-async function getJson(url) {
-  const xsrf = getCookie("XSRF-TOKEN");
-  const headers = {
-    Accept: "application/json",
-    "X-Requested-With": "XMLHttpRequest",
-    ...(xsrf ? { "X-XSRF-TOKEN": decodeURIComponent(xsrf) } : {}),
-  };
-
-  return await fetchJson(url, {
-    method: "GET",
-    credentials: "same-origin",
-    headers,
-  });
 }
 
 async function doApplySwUpdate() {
@@ -259,7 +197,6 @@ async function doApplySwUpdate() {
     const res = await requestWaitingSwActivation();
     log("[sw-activate]", res);
 
-    // 失敗系（UIに理由を残す）
     if (!res?.ok) {
       const r = res?.reason || "unknown";
       if (r === "unsupported") {
@@ -276,10 +213,9 @@ async function doApplySwUpdate() {
       return;
     }
 
-    // 成功系（ok:true）
     if (res?.reason === "no-waiting-after-update") {
       log("[ok]", "更新チェックを走らせましたが、waiting SW は見つかりませんでした。");
-      log("[hint]", "すでに最新の可能性が高いです（今回のSW更新適用は不要）。必要なら手動で再読み込みしてください。");
+      log("[hint]", "すでに最新の可能性が高いです。必要なら手動で再読み込みしてください。");
       await refreshState();
       return;
     }
@@ -292,17 +228,15 @@ async function doApplySwUpdate() {
         log("[sw]", "controllerchange not detected（必要なら手動リロードしてください）");
       }
 
-      // 安全策：適用後は一度リロード推奨（キャッシュ/ハンドラ混在を避ける）
       log("[hint]", "安全のためページを再読み込みします。");
       try { location.reload(); } catch {}
       return;
     }
 
-    // 想定外（将来 reason が増えた時の安全弁）
     log("[hint]", "想定外の応答です。状態を再取得します。");
     await refreshState();
   } catch (e) {
-    log("[sw-activate error]", String(e?.message ?? e));
+    log("[sw-activate error]", e?.message || e);
   } finally {
     busy.value = false;
   }
@@ -321,8 +255,7 @@ async function doSubscribe() {
       throw new Error("Missing VITE_VAPID_PUBLIC_KEY in .env");
     }
 
-    // 先にCSRF+認証（401/419を分かりやすく）
-    await ensureCsrfCookie();
+    // 先に認証（401を分かりやすく）
     await apiGetMe();
     if (!authOk.value) {
       log("[subscribe blocked]", "Not authenticated. Please login first.");
@@ -330,7 +263,7 @@ async function doSubscribe() {
     }
 
     // ★VAPIDパリティ（backendと一致しないなら購読を止める）
-    const backendVapid = await getJson("/api/v1/push/vapid-public");
+    const backendVapid = await getJson("/push/vapid-public");
     const backendKey = String(backendVapid?.public_key || "");
     if (!backendKey) throw new Error("Backend VAPID public key is missing.");
     if (backendKey !== String(frontendKey)) throw new Error("VAPID key mismatch between frontend and backend.");
@@ -361,12 +294,12 @@ async function doSubscribe() {
 
     log("[ok] subscribed in browser");
 
-    const api = await postJson("/api/v1/push/subscribe", sub.toJSON());
+    const api = await postJson("/push/subscribe", sub.toJSON());
     log("[ok] subscribed in server", api);
 
     await refreshState();
   } catch (e) {
-    log("[subscribe error]", String(e?.message ?? e));
+    log("[subscribe error]", e?.message || e);
   } finally {
     busy.value = false;
   }
@@ -384,11 +317,10 @@ async function doUnsubscribe() {
     const sub = await reg.pushManager.getSubscription();
     if (!sub) throw new Error("no subscription");
 
-    await ensureCsrfCookie();
     await apiGetMe();
     if (!authOk.value) throw new Error("Not authenticated. Please login first.");
 
-    await postJson("/api/v1/push/unsubscribe", { endpoint: sub.endpoint });
+    await postJson("/push/unsubscribe", { endpoint: sub.endpoint });
     log("[ok] unsubscribed in server");
 
     await sub.unsubscribe();
@@ -396,7 +328,7 @@ async function doUnsubscribe() {
 
     await refreshState();
   } catch (e) {
-    log("[unsubscribe error]", String(e?.message ?? e));
+    log("[unsubscribe error]", e?.message || e);
   } finally {
     busy.value = false;
   }
@@ -408,21 +340,19 @@ async function doTest() {
   logs.value = [];
 
   try {
-    await ensureCsrfCookie();
     await apiGetMe();
     if (!authOk.value) throw new Error("Not authenticated. Please login first.");
 
-    const res = await postJson("/api/v1/push/test", {
+    const res = await postJson("/push/test", {
       title: "Habit Tracker",
       body: "test push",
       url: "/today?from=push",
-      ts: new Date().toISOString(),
     });
 
     log("[ok] test sent", res);
     await refreshState();
   } catch (e) {
-    log("[test error]", String(e?.message ?? e));
+    log("[test error]", e?.message || e);
   } finally {
     busy.value = false;
   }

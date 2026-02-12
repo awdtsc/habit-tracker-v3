@@ -4,24 +4,36 @@ namespace App\Http\Controllers\Api\V1;
 
 use App\Http\Controllers\Controller;
 use App\Models\PushSubscription;
+use Illuminate\Database\QueryException;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Log;
 use Minishlink\WebPush\Subscription;
 
 class PushSubscriptionController extends Controller
 {
+    /**
+     * 方針A（厳格）:
+     * - endpoint は「全ユーザーで一意」（UNIQUE(endpoint) 前提）
+     * - 既に別 user_id に存在する endpoint が来たら常に 409（移管しない）
+     * - 自分の endpoint なら冪等に update（行は増やさない）
+     *
+     * 事故防止:
+     * - endpoint max は DB の varchar(500) に揃える
+     * - レースで UNIQUE(endpoint) に当たった場合も 409 に正規化
+     */
     public function subscribe(Request $request)
     {
         $user = $request->user();
         if (!$user) {
-            return response()->json(['message' => 'Unauthenticated.'], 401);
+            return response()->json(['ok' => false, 'message' => 'Unauthenticated.'], 401);
         }
 
         $data = $request->validate([
-            'endpoint' => ['required', 'string', 'max:2048'],
+            // DB: varchar(500)
+            'endpoint' => ['required', 'string', 'max:500'],
             'keys' => ['required', 'array'],
-            'keys.p256dh' => ['required', 'string', 'max:255'],
-            'keys.auth' => ['required', 'string', 'max:255'],
+            'keys.p256dh' => ['required', 'string'],
+            'keys.auth' => ['required', 'string'],
             'contentEncoding' => ['nullable', 'string', 'max:32'],
             'content_encoding' => ['nullable', 'string', 'max:32'],
         ]);
@@ -36,33 +48,63 @@ class PushSubscriptionController extends Controller
             ?? $data['content_encoding']
             ?? 'aesgcm';
 
-        $existing = PushSubscription::query()
-            ->where('endpoint_hash', $endpointHash)
+        // まず endpoint で衝突判定（方針A: endpoint は全ユーザーで一意）
+        $existingByEndpoint = PushSubscription::query()
+            ->where('endpoint', $endpoint)
             ->first();
 
-        if ($existing && (int) $existing->user_id !== (int) $user->id) {
-            $sameKeys = hash_equals((string) $existing->p256dh, (string) $p256dh)
-                && hash_equals((string) $existing->auth, (string) $auth);
-
-            if (!$sameKeys) {
-                return response()->json([
-                    'message' => 'Subscription endpoint is already registered to another user.',
-                    'code' => 'SUBSCRIPTION_CONFLICT',
-                ], 409);
-            }
+        if ($existingByEndpoint && (int) $existingByEndpoint->user_id !== (int) $user->id) {
+            return response()->json([
+                'ok' => false,
+                'message' => 'Subscription endpoint is already registered to another user.',
+                'code' => 'SUBSCRIPTION_CONFLICT',
+            ], 409);
         }
 
-        $sub = PushSubscription::query()->updateOrCreate(
-            ['endpoint_hash' => $endpointHash],
-            [
+        try {
+            // 冪等更新: endpoint をキーにする（DB UNIQUE(endpoint) と一致）
+            $sub = PushSubscription::query()->updateOrCreate(
+                ['endpoint' => $endpoint],
+                [
+                    'user_id' => $user->id,
+                    'endpoint_hash' => $endpointHash,
+                    'p256dh' => $p256dh,
+                    'auth' => $auth,
+                    'content_encoding' => $contentEncoding,
+                    'last_seen_at' => now(),
+                ]
+            );
+        } catch (QueryException $e) {
+            // レース等で UNIQUE(endpoint) / UNIQUE(user_id,endpoint) に当たった場合を 409 に正規化
+            // MySQL duplicate key: SQLSTATE[23000] / errorInfo[1] = 1062
+            $err = $e->errorInfo[1] ?? null;
+            if ((string) $e->getCode() === '23000' || (int) $err === 1062) {
+                // もう一度 endpoint の所有者を確定して 409 へ
+                $owner = PushSubscription::query()
+                    ->where('endpoint', $endpoint)
+                    ->first();
+
+                if ($owner && (int) $owner->user_id !== (int) $user->id) {
+                    return response()->json([
+                        'ok' => false,
+                        'message' => 'Subscription endpoint is already registered to another user.',
+                        'code' => 'SUBSCRIPTION_CONFLICT',
+                    ], 409);
+                }
+            }
+
+            Log::warning('push/subscribe failed', [
                 'user_id' => $user->id,
-                'endpoint' => $endpoint,
-                'p256dh' => $p256dh,
-                'auth' => $auth,
-                'content_encoding' => $contentEncoding,
-                'last_seen_at' => now(),
-            ]
-        );
+                'code' => $e->getCode(),
+                'err' => $err,
+            ]);
+
+            return response()->json([
+                'ok' => false,
+                'message' => 'Failed to persist subscription.',
+                'code' => 'SUBSCRIPTION_PERSIST_FAILED',
+            ], 500);
+        }
 
         return response()->json([
             'ok' => true,
@@ -74,18 +116,21 @@ class PushSubscriptionController extends Controller
     {
         $user = $request->user();
         if (!$user) {
-            return response()->json(['message' => 'Unauthenticated.'], 401);
+            return response()->json(['ok' => false, 'message' => 'Unauthenticated.'], 401);
         }
 
         $data = $request->validate([
-            'endpoint' => ['required', 'string', 'max:2048'],
+            // DB: varchar(500)
+            'endpoint' => ['required', 'string', 'max:500'],
         ]);
 
-        $endpointHash = PushSubscription::hashEndpoint($data['endpoint']);
+        $endpoint = $data['endpoint'];
 
+        // 方針A: endpoint は全ユーザーで一意だが、
+        // 解除は「自分のものだけ」削除（安全）
         $deleted = PushSubscription::query()
             ->where('user_id', $user->id)
-            ->where('endpoint_hash', $endpointHash)
+            ->where('endpoint', $endpoint)
             ->delete();
 
         return response()->json([
@@ -103,7 +148,7 @@ class PushSubscriptionController extends Controller
     {
         $user = $request->user();
         if (!$user) {
-            return response()->json(['message' => 'Unauthenticated.'], 401);
+            return response()->json(['ok' => false, 'message' => 'Unauthenticated.'], 401);
         }
 
         $cfg = config('webpush.vapid');
@@ -113,6 +158,7 @@ class PushSubscriptionController extends Controller
             return response()->json([
                 'ok' => false,
                 'message' => 'Missing backend VAPID public key',
+                'code' => 'VAPID_MISSING',
             ], 503);
         }
 
@@ -125,12 +171,12 @@ class PushSubscriptionController extends Controller
     public function test(Request $request)
     {
         if (app()->environment('production')) {
-            return response()->json(['message' => 'Disabled in production.'], 403);
+            return response()->json(['ok' => false, 'message' => 'Disabled in production.'], 403);
         }
 
         $user = $request->user();
         if (!$user) {
-            return response()->json(['message' => 'Unauthenticated.'], 401);
+            return response()->json(['ok' => false, 'message' => 'Unauthenticated.'], 401);
         }
 
         $data = $request->validate([
@@ -169,7 +215,7 @@ class PushSubscriptionController extends Controller
             ->get();
 
         if ($subs->isEmpty()) {
-            return response()->json(['message' => 'No subscriptions.'], 404);
+            return response()->json(['ok' => false, 'message' => 'No subscriptions.'], 404);
         }
 
         $webPush = $this->makeWebPush();

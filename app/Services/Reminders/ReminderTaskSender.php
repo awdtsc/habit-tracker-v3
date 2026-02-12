@@ -3,6 +3,12 @@
 namespace App\Services\Reminders;
 
 use App\Services\WebPushService;
+use Carbon\Carbon;
+
+// 明示import（拡張の警告回避用）
+use App\Services\Reminders\RemindTaskRepository;
+use App\Services\Reminders\ReminderPayloadFactory;
+use App\Services\Reminders\ReminderDispatchPolicy;
 
 class ReminderTaskSender
 {
@@ -23,7 +29,7 @@ class ReminderTaskSender
         string $token,
         string $todayYmd,
         array $doneSet,
-        \Carbon\Carbon $runNowJst,
+        Carbon $runNowJst,
         bool $debug,
         $console = null
     ): array {

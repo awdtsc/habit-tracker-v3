@@ -38,15 +38,26 @@ class PushSubscriptionController extends Controller
             'content_encoding' => ['nullable', 'string', 'max:32'],
         ]);
 
-        $endpoint = $data['endpoint'];
+        // ★subscribe/unsubscribe/Model saving と同じ正規化（trim）
+        $endpoint = trim((string) $data['endpoint']);
+        if ($endpoint === '') {
+            return response()->json(['ok' => false, 'message' => 'Invalid endpoint.'], 422);
+        }
+
         $endpointHash = PushSubscription::hashEndpoint($endpoint);
 
-        $p256dh = $data['keys']['p256dh'];
-        $auth = $data['keys']['auth'];
+        $p256dh = (string) $data['keys']['p256dh'];
+        $auth = (string) $data['keys']['auth'];
 
-        $contentEncoding = $data['contentEncoding']
-            ?? $data['content_encoding']
-            ?? 'aesgcm';
+        // ★snake/camel どちらでも受ける。空なら既定。
+        $contentEncoding = (string) (
+            $data['contentEncoding']
+                ?? $data['content_encoding']
+                ?? 'aesgcm'
+        );
+        if ($contentEncoding === '') {
+            $contentEncoding = 'aesgcm';
+        }
 
         // まず endpoint で衝突判定（方針A: endpoint は全ユーザーで一意）
         $existingByEndpoint = PushSubscription::query()

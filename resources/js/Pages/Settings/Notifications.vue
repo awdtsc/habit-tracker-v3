@@ -140,8 +140,22 @@ async function findSwRegistration() {
   return match || regs[0] || null;
 }
 
+/**
+ * Permission: “default” のときだけ requestPermission() を呼ぶ
+ */
 async function ensurePermission() {
   if (!("Notification" in window)) throw new Error("Notification not supported");
+
+  const current = Notification.permission;
+  permission.value = current;
+
+  if (current === "granted") return;
+
+  if (current === "denied") {
+    throw new Error("permission denied (please enable notifications in browser settings)");
+  }
+
+  // current === "default"
   const p = await Notification.requestPermission();
   permission.value = p;
   if (p !== "granted") throw new Error("permission not granted");
@@ -181,6 +195,7 @@ async function refreshState() {
   } catch (e) {
     log("[refresh error]", e?.message || e);
   } finally {
+    // ★SWが無くても常に auth 状態を更新する
     await apiGetMe();
   }
 }
@@ -193,7 +208,6 @@ async function doApplySwUpdate() {
   try {
     log("[sw-activate]", "checking update → waiting? → SKIP_WAITING (→ controllerchange → CLAIM)");
 
-    // registerSw.js の新仕様に合わせて「引数無し」で呼ぶ（受け取っても無視される）
     const res = await requestWaitingSwActivation();
     log("[sw-activate]", res);
 

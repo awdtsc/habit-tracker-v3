@@ -8,7 +8,8 @@
  *    - 既存タブがあれば focus して postMessage（REMINDER_CLICK）
  *      - week / settings 等に居ても “勝手に /today へ飛ばさない”
  *      - タブがある場合は navigate/openWindow をしない
- *    - タブが無ければ /today?from=push&task_id=... を openWindow（到達保証）
+ *    - タブが無ければ payload.url（same-origin制約）を openWindow（deep link 許可）
+ *      - 不正/欠損なら /today?from=push&task_id=... に fallback（到達保証）
  *
  * Update policy (運用安定優先):
  * - ★自動 skipWaiting しない
@@ -131,21 +132,25 @@ function sanitizeNotificationData(payload, openUrl, taskId) {
     };
 }
 
+/**
+ * Same-origin window client 判定（startsWith ではなく origin 厳密比較）
+ */
 function isSameOriginWindowClient(origin, client) {
-    return (
-        client &&
-        typeof client.url === "string" &&
-        client.url.startsWith(origin)
-    );
+    try {
+        const u = new URL(client?.url || "");
+        return u.origin === origin;
+    } catch (e) {
+        return false;
+    }
 }
 
 /**
- * “アプリタブ” 判定（安全側）
+ * “アプリタブ” 判定（安全側 / origin 厳密比較）
  */
 function isAppClient(origin, clientUrl) {
     try {
         const u = new URL(clientUrl);
-        if (!u.href.startsWith(origin)) return false;
+        if (u.origin !== origin) return false;
 
         const p = u.pathname || "/";
         if (p === "/login" || p === "/register") return false;
@@ -190,7 +195,8 @@ self.addEventListener("push", (event) => {
             const origin = self.location.origin;
             const fallbackPath = buildFallbackPath(taskId);
 
-            const openUrl = toSameOriginUrl(origin, fallbackPath, fallbackPath);
+            // ★deep link 許可: payload.url を採用（same-origin制約）、ダメなら fallback
+            const openUrl = toSameOriginUrl(origin, payload.url, fallbackPath);
 
             const options = {
                 body,
@@ -221,7 +227,8 @@ self.addEventListener("notificationclick", (event) => {
             const taskId = pickTaskId(data);
             const fallbackPath = buildFallbackPath(taskId);
 
-            const openUrl = toSameOriginUrl(origin, fallbackPath, fallbackPath);
+            // ★deep link 許可: data.url を採用（same-origin制約）、ダメなら fallback
+            const openUrl = toSameOriginUrl(origin, data.url, fallbackPath);
 
             const clientList = await self.clients.matchAll({
                 type: "window",

@@ -219,12 +219,50 @@ function assertCookieModeEnabled(fnName) {
     throw new Error(msg);
 }
 
+// ============================================================================
+// Unified JSON helpers (2-β向け：Subscribe/Unsubscribe/Test をUIで扱いやすく）
+// - 失敗時は「投げる」(throw) けど、throwする中身を整形して UI でそのまま表示可能にする
+// ============================================================================
+
+function buildApiError(err, fallbackMessage = "Request failed.") {
+    const status = err?.response?.status ?? 0;
+    const data = err?.response?.data;
+
+    const message =
+        (data && typeof data === "object" && (data.message || data.error)) ||
+        (typeof data === "string" ? data : "") ||
+        err?.message ||
+        fallbackMessage;
+
+    const code =
+        data && typeof data === "object" && data.code
+            ? String(data.code)
+            : null;
+
+    return {
+        ok: false,
+        status,
+        code,
+        message: String(message),
+        data,
+    };
+}
+
 /**
  * 外からも使えるように export（Notifications.vue 等で POST 前に呼べる）
+ * ★CSRF取得が失敗した場合も「原因つき」で UI に出せるように整形して throw
  */
 export async function ensureCsrfCookie() {
     assertCookieModeEnabled("ensureCsrfCookie");
-    await initCsrf();
+    try {
+        await initCsrf();
+    } catch (e) {
+        // /sanctum/csrf-cookie は同一オリジンの前提。失敗は運用上クリティカルなので明示する。
+        throw buildApiError(
+            e,
+            "Failed to fetch CSRF cookie (/sanctum/csrf-cookie).",
+        );
+    }
 }
 
 export async function cookieLogin({ email, password }) {
@@ -288,35 +326,6 @@ export async function cookieLogout() {
         },
     });
     return res.data;
-}
-
-// ============================================================================
-// Unified JSON helpers (2-β向け：Subscribe/Unsubscribe/Test をUIで扱いやすく）
-// - 失敗時は「投げる」(throw) けど、throwする中身を整形して UI でそのまま表示可能にする
-// ============================================================================
-
-function buildApiError(err, fallbackMessage = "Request failed.") {
-    const status = err?.response?.status ?? 0;
-    const data = err?.response?.data;
-
-    const message =
-        (data && typeof data === "object" && (data.message || data.error)) ||
-        (typeof data === "string" ? data : "") ||
-        err?.message ||
-        fallbackMessage;
-
-    const code =
-        data && typeof data === "object" && data.code
-            ? String(data.code)
-            : null;
-
-    return {
-        ok: false,
-        status,
-        code,
-        message: String(message),
-        data,
-    };
 }
 
 export async function getJson(url, config = {}) {

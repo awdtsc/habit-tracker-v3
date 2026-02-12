@@ -8,6 +8,7 @@ use Illuminate\Database\QueryException;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Log;
 use Minishlink\WebPush\Subscription;
+use Minishlink\WebPush\WebPush;
 
 class PushSubscriptionController extends Controller
 {
@@ -209,16 +210,39 @@ class PushSubscriptionController extends Controller
             ], 503);
         }
 
-        // stale cleanup (運用安全弁): 30日見てない購読は削除
+        // sanitize helper（レスポンス/ログ両方の最終防波堤）
+        $safeReason = static function (string $reason): string {
+            $reason = trim($reason);
+            if ($reason === '') return 'push error';
+
+            // URL を潰す
+            $reason = preg_replace('~https?://\S+~u', '[url]', $reason) ?? $reason;
+
+            // token / 長い識別子を潰す（短めも含めて守る）
+            $reason = preg_replace('~[A-Za-z0-9_\-]{30,}~u', '[redacted]', $reason) ?? $reason;
+
+            // 改行などを潰す
+            $reason = preg_replace("~[\r\n\t]+~u", ' ', $reason) ?? $reason;
+
+            return mb_strimwidth(trim($reason), 0, 200, '…', 'UTF-8');
+        };
+
+        // stale cleanup (運用安全弁): N日見てない購読は削除（0なら無効）
         try {
-            PushSubscription::query()
-                ->where('user_id', $user->id)
-                ->whereNotNull('last_seen_at')
-                ->where('last_seen_at', '<', now()->subDays(30))
-                ->delete();
+            $days = (int) config('webpush.stale_prune_days', 0);
+            if ($days > 0) {
+                PushSubscription::query()
+                    ->where('user_id', $user->id)
+                    ->whereNotNull('last_seen_at')
+                    ->where('last_seen_at', '<', now()->subDays($days))
+                    ->delete();
+            }
         } catch (\Throwable $e) {
-            // cleanup失敗は致命ではないので継続（ただしログ）
-            Log::warning('push/test stale cleanup failed', ['e' => $e->getMessage()]);
+            // cleanup失敗は致命ではないので継続（ただしログは sanitize）
+            Log::warning('push/test stale cleanup failed', [
+                'user_id' => (int) $user->id,
+                'reason' => $safeReason((string) $e->getMessage()),
+            ]);
         }
 
         $subs = PushSubscription::query()
@@ -258,7 +282,7 @@ class PushSubscriptionController extends Controller
                 $failed++;
                 $errors[] = [
                     'endpoint_hash' => $subRow->endpoint_hash,
-                    'reason' => $e->getMessage(),
+                    'reason' => $safeReason((string) $e->getMessage()),
                 ];
             }
         }
@@ -272,7 +296,7 @@ class PushSubscriptionController extends Controller
 
                 $failed++;
 
-                $reason = method_exists($report, 'getReason')
+                $rawReason = method_exists($report, 'getReason')
                     ? (string) $report->getReason()
                     : 'failed';
 
@@ -296,7 +320,7 @@ class PushSubscriptionController extends Controller
                 $errors[] = [
                     'endpoint_hash' => $endpointHash,
                     'status' => $statusCode,
-                    'reason' => $reason,
+                    'reason' => $safeReason($rawReason),
                 ];
 
                 // 無効購読の掃除（push service 由来の確定パターン）
@@ -310,13 +334,17 @@ class PushSubscriptionController extends Controller
                 }
             }
         } catch (\Throwable $e) {
-            Log::warning('push/test flush failed', ['e' => $e->getMessage()]);
+            Log::warning('push/test flush failed', [
+                'user_id' => (int) $user->id,
+                'reason' => $safeReason((string) $e->getMessage()),
+            ]);
+
             return response()->json([
                 'ok' => false,
                 'sent' => 0,
                 'failed' => 1,
                 'removed' => 0,
-                'errors' => [['reason' => $e->getMessage()]],
+                'errors' => [['reason' => 'webpush transport error']],
             ], 502);
         }
 
@@ -335,7 +363,7 @@ class PushSubscriptionController extends Controller
     {
         $cfg = config('webpush.vapid');
 
-        return new \Minishlink\WebPush\WebPush([
+        return new WebPush([
             'VAPID' => [
                 'subject' => $cfg['subject'] ?? null,
                 'publicKey' => $cfg['public_key'] ?? null,

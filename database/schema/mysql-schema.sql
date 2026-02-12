@@ -204,12 +204,9 @@ CREATE TABLE `push_subscriptions` (
   UNIQUE KEY `ps_user_hash_unique` (`user_id`,`endpoint_hash`),
   KEY `push_subscriptions_user_id_index` (`user_id`),
   KEY `push_subscriptions_last_used_at_index` (`last_used_at`),
+  KEY `push_subscriptions_last_seen_at_index` (`last_seen_at`),
   CONSTRAINT `push_subscriptions_user_id_foreign` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-/*!40101 SET character_set_client = @saved_cs_client */;
-DROP TABLE IF EXISTS `push_subscriptions_backup`;
-/*!40101 SET @saved_cs_client     = @@character_set_client */;
-/*!40101 SET character_set_client = utf8 */;
 CREATE TABLE `push_subscriptions_backup` (
   `id` bigint(20) unsigned NOT NULL AUTO_INCREMENT,
   `user_id` bigint(20) unsigned DEFAULT NULL,

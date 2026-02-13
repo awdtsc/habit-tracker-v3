@@ -322,8 +322,10 @@ class WebPushService
             ];
         }
 
-        // 安全側（完全成功のみ ok）
-        $ok = ($queued > 0 && $failed === 0);
+        // ★安全側（完全成功のみ ok）
+        // - failed: 送信失敗 / transport 失敗 / queue 構築失敗
+        // - skipped: DB行不備で queue できなかった（運用上は「届いてない」なので ok にはしない）
+        $ok = ($queued > 0 && $failed === 0 && $skipped === 0);
 
         return [
             'ok' => $ok,

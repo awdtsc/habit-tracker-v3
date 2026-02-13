@@ -113,9 +113,8 @@ class WebPushService
 
                     $removed += (int) $removedNow;
                 }
-            } catch (\Throwable $e) {
-                // ※ここで failures に入れると「送信失敗」と誤認し得るので入れない
-                // 必要なら logger()->warning('stale_prune_failed: '.$this->safeReason($e->getMessage()));
+            } catch (\Throwable) {
+                // failures には入れない（送信失敗と誤認されるため）
             }
 
             // prune 後に取り直す（購読が全消えしてたらここで終わる）
@@ -142,7 +141,7 @@ class WebPushService
             $webPush = new WebPush(['VAPID' => $vapid]);
 
             foreach ($subs as $sub) {
-                $endpoint = (string) ($sub->endpoint ?? '');
+                $endpoint = trim((string) ($sub->endpoint ?? ''));
                 $p256dh = (string) ($sub->p256dh ?? '');
                 $authToken = (string) ($sub->auth ?? '');
 
@@ -167,11 +166,14 @@ class WebPushService
                     continue;
                 }
 
+                // ★contentEncoding は Model の唯一の真実で正規化
+                $contentEncoding = PushSubscription::normalizeContentEncoding($sub->content_encoding ?? null);
+
                 $subscription = Subscription::create([
                     'endpoint' => $endpoint,
                     'publicKey' => $p256dh,
                     'authToken' => $authToken,
-                    'contentEncoding' => $sub->content_encoding ?: 'aes128gcm',
+                    'contentEncoding' => $contentEncoding,
                 ]);
 
                 $webPush->queueNotification($subscription, $json, [
@@ -180,22 +182,34 @@ class WebPushService
                 $queued++;
 
                 // 足跡（成功/失敗に関係なく「使おうとした」記録）
-                $sub->last_used_at = now();
-                $sub->last_seen_at = now();
-                $sub->saveQuietly();
+                try {
+                    $sub->last_used_at = now();
+                    $sub->last_seen_at = now();
+                    $sub->saveQuietly();
+                } catch (\Throwable) {
+                    // 足跡更新失敗は送信可用性を落とさない
+                }
             }
 
             foreach ($webPush->flush() as $report) {
                 $endpoint = method_exists($report, 'getEndpoint') ? (string) $report->getEndpoint() : '';
                 $endpointHash = $endpoint !== '' ? PushSubscription::hashEndpoint($endpoint) : null;
 
-                if ($report->isSuccess()) {
+                $isSuccess = false;
+                if (method_exists($report, 'isSuccess')) {
+                    $isSuccess = (bool) $report->isSuccess();
+                }
+
+                if ($isSuccess) {
                     $sent++;
                     continue;
                 }
 
                 $failed++;
-                $reason = method_exists($report, 'getReason') ? (string) $report->getReason() : 'unknown';
+
+                $reason = method_exists($report, 'getReason')
+                    ? (string) $report->getReason()
+                    : 'failed';
 
                 $statusCode = null;
                 if (method_exists($report, 'getResponse')) {
@@ -227,7 +241,7 @@ class WebPushService
             $failures[] = [
                 'endpoint_hash' => null,
                 'status' => null,
-                'reason' => $this->safeReason($e->getMessage()),
+                'reason' => $this->safeReason((string) $e->getMessage()),
             ];
 
             return [
@@ -259,8 +273,18 @@ class WebPushService
 
     private function safeReason(string $reason): string
     {
+        $reason = trim($reason);
+        if ($reason === '') return 'push error';
+
+        // URL を潰す
         $reason = preg_replace('~https?://\S+~u', '[url]', $reason) ?? $reason;
-        $reason = preg_replace('~([A-Za-z0-9_\-]{40,})~u', '[redacted]', $reason) ?? $reason;
-        return mb_strimwidth($reason, 0, 200, '…', 'UTF-8');
+
+        // token / 長い識別子を潰す（短めも含めて守る）
+        $reason = preg_replace('~[A-Za-z0-9_\-]{30,}~u', '[redacted]', $reason) ?? $reason;
+
+        // 改行などを潰す
+        $reason = preg_replace("~[\r\n\t]+~u", ' ', $reason) ?? $reason;
+
+        return mb_strimwidth(trim($reason), 0, 200, '…', 'UTF-8');
     }
 }

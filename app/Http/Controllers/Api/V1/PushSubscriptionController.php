@@ -50,15 +50,10 @@ class PushSubscriptionController extends Controller
         $p256dh = (string) $data['keys']['p256dh'];
         $auth = (string) $data['keys']['auth'];
 
-        // ★snake/camel どちらでも受ける。空なら既定。
-        $contentEncoding = (string) (
-            $data['contentEncoding']
-                ?? $data['content_encoding']
-                ?? 'aesgcm'
+        // ★camel/snake どちらでも受ける。既定値は Model の唯一の真実へ寄せる
+        $contentEncoding = PushSubscription::normalizeContentEncoding(
+            $data['contentEncoding'] ?? $data['content_encoding'] ?? null
         );
-        if ($contentEncoding === '') {
-            $contentEncoding = 'aesgcm';
-        }
 
         // まず endpoint で衝突判定（方針A: endpoint は全ユーザーで一意）
         $existingByEndpoint = PushSubscription::query()
@@ -268,7 +263,8 @@ class PushSubscriptionController extends Controller
                     'endpoint' => $subRow->endpoint,
                     'publicKey' => $subRow->p256dh,
                     'authToken' => $subRow->auth,
-                    'contentEncoding' => $subRow->content_encoding ?: 'aesgcm',
+                    // ★Model の唯一の真実で正規化（DB値が空/未知でも事故らない）
+                    'contentEncoding' => PushSubscription::normalizeContentEncoding($subRow->content_encoding ?? null),
                 ]);
 
                 $payload = json_encode([

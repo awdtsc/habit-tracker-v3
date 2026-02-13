@@ -12,10 +12,26 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
  * Web Push の購読情報（端末ごとに 1 件を想定）
  * - DBの重複防止は endpoint の UNIQUE が主（環境差分を吸収しやすい）
  * - endpoint_hash は endpoint の sha256（大文字HEX）で補助キー
+ *
+ * 運用事故防止（重要）:
+ * - content_encoding の既定値がコードパスでブレると「送れたり送れなかったり」事故の温床
+ *   => ここを唯一の真実として統一・正規化する
  */
 class PushSubscription extends Model
 {
     protected $table = 'push_subscriptions';
+
+    /**
+     * ★唯一の真実: アプリ標準の content encoding
+     * - 現代ブラウザの主流は aes128gcm
+     */
+    public const DEFAULT_CONTENT_ENCODING = 'aes128gcm';
+
+    /**
+     * 受け入れる encoding のホワイトリスト
+     * - 旧来互換として aesgcm も許可（必要なら移行期間用）
+     */
+    public const ALLOWED_CONTENT_ENCODINGS = ['aes128gcm', 'aesgcm'];
 
     protected $fillable = [
         'user_id',
@@ -43,17 +59,39 @@ class PushSubscription extends Model
         return strtoupper(hash('sha256', $endpoint));
     }
 
+    /**
+     * content_encoding を正規化（唯一の真実）
+     * - null/空/未知値は DEFAULT に寄せる
+     * - 許可値は whitelist のみ
+     */
+    public static function normalizeContentEncoding(?string $value): string
+    {
+        $v = strtolower(trim((string) $value));
+        if ($v === '') {
+            return self::DEFAULT_CONTENT_ENCODING;
+        }
+        if (in_array($v, self::ALLOWED_CONTENT_ENCODINGS, true)) {
+            return $v;
+        }
+        return self::DEFAULT_CONTENT_ENCODING;
+    }
+
     protected static function booted(): void
     {
         static::saving(function (self $model) {
             if (!isset($model->endpoint)) return;
 
+            // endpoint 正規化（trim）
             $endpoint = trim((string) $model->endpoint);
             $model->endpoint = $endpoint;
 
+            // endpoint_hash 再生成（正規化ドリフト防止）
             if ($endpoint !== '') {
                 $model->endpoint_hash = static::hashEndpoint($endpoint);
             }
+
+            // content_encoding 正規化（どの保存経路でも統一）
+            $model->content_encoding = static::normalizeContentEncoding($model->content_encoding ?? null);
         });
     }
 
@@ -84,7 +122,10 @@ class PushSubscription extends Model
         $p256dh = (string)($payload['keys']['p256dh'] ?? $payload['p256dh'] ?? '');
         $auth   = (string)($payload['keys']['auth'] ?? $payload['auth'] ?? '');
 
-        $contentEncoding = (string)($payload['contentEncoding'] ?? $payload['content_encoding'] ?? 'aes128gcm');
+        // ★どの経路でも同じ正規化ルールに統一
+        $contentEncoding = static::normalizeContentEncoding(
+            $payload['contentEncoding'] ?? $payload['content_encoding'] ?? null
+        );
 
         // user agent は request() が無い文脈（CLI等）でも落ちないようにする
         $ua = $payload['userAgent'] ?? $payload['user_agent'] ?? null;

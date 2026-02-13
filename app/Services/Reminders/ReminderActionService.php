@@ -30,6 +30,7 @@ class ReminderActionService
    *
    * 追加ガード（運用事故防止）:
    * - unique(habit_time_id, remind_at) 衝突は 500 にせず冪等化（既存taskを返す）
+   * - ただし採用する既存行は「同値」（status/payload系列整合）であることを検証し、違うなら 409
    *
    * @return array<string,mixed>
    */
@@ -121,14 +122,15 @@ class ReminderActionService
         ]];
 
         // 7) 新しい pending task を作る
-        //    ★ unique(habit_time_id, remind_at) 衝突は冪等に扱い、既存行を返す
+        //    ★ unique(habit_time_id, remind_at) 衝突は冪等に扱うが、
+        //      採用する既存行が「同値」（pending かつ root/parent が一致）であることを検証する
         try {
           $newId = DB::table('remind_tasks')->insertGetId([
             'habit_time_id'  => (int)$locked->habit_time_id,
             'habit_log_id'   => null,
             'parent_task_id' => (int)$locked->id,
             'root_task_id'   => $rootId,
-            'remind_at'      => $remindAt, // Carbon をそのまま渡してOK（Laravelが整形）
+            'remind_at'      => $remindAt,
             'sent_at'        => null,
             'reschedule'     => json_encode($reschedule, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
             'status'         => 'pending',
@@ -148,23 +150,43 @@ class ReminderActionService
           ];
         } catch (QueryException $e) {
           if ($this->isDuplicateKey($e)) {
-            // unique(habit_time_id, remind_at) の既存行を採用（冪等）
-            $existingId = DB::table('remind_tasks')
+
+            // 既存の衝突行をロックして取得（同値チェック用）
+            $existing = DB::table('remind_tasks')
+              ->select(['id', 'status', 'parent_task_id', 'root_task_id'])
               ->where('habit_time_id', (int)$locked->habit_time_id)
               ->where('remind_at', $remindAt->toDateTimeString())
-              ->value('id');
+              ->lockForUpdate()
+              ->first();
 
-            if ($existingId) {
-              return [
-                'new_id' => (int)$existingId,
-                'created' => false,
-                'root_id' => (int)$rootId,
-                'habit' => $habit,
-                'ht' => $ht,
-                'parent_id' => (int)$locked->id,
-              ];
+            if ($existing) {
+              $existingStatus = (string)($existing->status ?? '');
+              $existingParent = $existing->parent_task_id ? (int)$existing->parent_task_id : null;
+              $existingRoot = $existing->root_task_id ? (int)$existing->root_task_id : null;
+
+              $linkageOk = ($existingParent === (int)$locked->id) && ($existingRoot === $rootId);
+              $statusOk = ($existingStatus === 'pending');
+
+              // “同値”なら採用（冪等）
+              if ($linkageOk && $statusOk) {
+                return [
+                  'new_id' => (int)$existing->id,
+                  'created' => false,
+                  'root_id' => (int)$rootId,
+                  'habit' => $habit,
+                  'ht' => $ht,
+                  'parent_id' => (int)$locked->id,
+                ];
+              }
+
+              // “同値ではない”衝突は成功扱いにしない（静かな破壊を防ぐ）
+              throw new \RuntimeException('conflict', 409);
             }
+
+            // “あるはずの行”が無いなら、衝突状態として409
+            throw new \RuntimeException('conflict', 409);
           }
+
           throw $e;
         }
       });

@@ -18,6 +18,11 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
  *  - 保存時に最低限の整合性（owner補完 / self評価のstatus導出）を担保
  *  - N+1 的に habit を何度も参照しない（必要最小の字段だけを1回で取る）
  *  - user_id を mass-assignment から外して、将来の事故（なりすまし）を防ぐ
+ *
+ * 重要方針（監査観点）：
+ *  - self評価の status は **rating が指定された時だけ** 変更する
+ *    - rating なし保存で status を勝手に none に寄せない（サイレント副作用防止）
+ *  - status のデフォルトは attributes で none を維持（新規作成時の整合性はここで担保）
  */
 class HabitLog extends Model
 {
@@ -144,20 +149,15 @@ class HabitLog extends Model
       }
 
       // self評価（evaluation_type=self）のときだけ、status を rating から決める
-      // - rating が来た時のみ上書きする（呼び出し側が status を明示したいケースの余地を残す）
-      // - rating が無く status も空なら none に寄せる（整合性）
-      if ($habit && (string) $habit->evaluation_type === 'self') {
-        if ($log->rating !== null) {
-          $log->status = ((int) $log->rating >= 4) ? 'done' : 'none';
-        } elseif (empty($log->status)) {
-          $log->status = 'none';
-        }
+      // - rating が来た時のみ上書きする（rating無し保存で status を勝手に変えない）
+      if ($habit && (string)$habit->evaluation_type === 'self' && $log->rating !== null) {
+        $log->status = ((int)$log->rating >= 4) ? 'done' : 'none';
       }
 
       // user_id は「未設定のときだけ」補完する
       // - mass assignment では受け付けない前提なので、ここで確定できる
       if (empty($log->user_id) && $habit && !empty($habit->user_id)) {
-        $log->user_id = (int) $habit->user_id;
+        $log->user_id = (int)$habit->user_id;
       }
     });
   }

@@ -137,10 +137,37 @@ class WebPushService
             }
         }
 
+        // ★ここからが codex ❌(E) 修正の核：
+        // - queue を 1購読ごとに try/catch で隔離
+        // - flush は transport 層として別 try/catch
+        $webPush = null;
+
         try {
             $webPush = new WebPush(['VAPID' => $vapid]);
+        } catch (\Throwable $e) {
+            // WebPush の初期化が死んだら、ここは全体失敗でOK
+            $failed = max(1, $failed);
+            $failures[] = [
+                'endpoint_hash' => null,
+                'status' => null,
+                'reason' => $this->safeReason((string) $e->getMessage()),
+            ];
 
-            foreach ($subs as $sub) {
+            return [
+                'ok' => false,
+                'queued' => $queued,
+                'sent' => $sent,
+                'failed' => $failed,
+                'skipped' => $skipped,
+                'removed' => $removed,
+                'message' => 'webpush transport error',
+                'failures' => array_slice($failures, 0, 5),
+            ];
+        }
+
+        // queue phase (per-subscription isolated)
+        foreach ($subs as $sub) {
+            try {
                 $endpoint = trim((string) ($sub->endpoint ?? ''));
                 $p256dh = (string) ($sub->p256dh ?? '');
                 $authToken = (string) ($sub->auth ?? '');
@@ -189,8 +216,38 @@ class WebPushService
                 } catch (\Throwable) {
                     // 足跡更新失敗は送信可用性を落とさない
                 }
+            } catch (\Throwable $e) {
+                // ★ここが修正点：1件の壊れ購読で全体を止めない
+                $failed++;
+                $failures[] = [
+                    'endpoint_hash' => !empty($sub->endpoint)
+                        ? PushSubscription::hashEndpoint((string) $sub->endpoint)
+                        : ($sub->endpoint_hash ?? null),
+                    'status' => null,
+                    'reason' => $this->safeReason((string) $e->getMessage()),
+                ];
+                continue;
             }
+        }
 
+        // queued がゼロなら flush しても意味がない（transport層例外も避ける）
+        if ($queued === 0) {
+            $failed = max($failed, 1);
+
+            return [
+                'ok' => false,
+                'queued' => 0,
+                'sent' => 0,
+                'failed' => $failed,
+                'skipped' => $skipped,
+                'removed' => $removed,
+                'message' => 'No valid subscriptions queued',
+                'failures' => array_slice($failures, 0, 5),
+            ];
+        }
+
+        // flush phase (transport isolated)
+        try {
             foreach ($webPush->flush() as $report) {
                 $endpoint = method_exists($report, 'getEndpoint') ? (string) $report->getEndpoint() : '';
                 $endpointHash = $endpoint !== '' ? PushSubscription::hashEndpoint($endpoint) : null;
@@ -227,16 +284,25 @@ class WebPushService
 
                 // ★410/404 は購読が死んでいるので自動削除（運用事故防止）
                 if ($endpointHash && ($statusCode === 410 || $statusCode === 404)) {
-                    $deleted = PushSubscription::query()
-                        ->where('user_id', $userId)
-                        ->where('endpoint_hash', $endpointHash)
-                        ->delete();
+                    try {
+                        $deleted = PushSubscription::query()
+                            ->where('user_id', $userId)
+                            ->where('endpoint_hash', $endpointHash)
+                            ->delete();
 
-                    $removed += (int) $deleted;
+                        $removed += (int) $deleted;
+                    } catch (\Throwable $e) {
+                        // 削除失敗は送信可用性に影響させない（ただし原因は failures に残す）
+                        $failures[] = [
+                            'endpoint_hash' => $endpointHash,
+                            'status' => null,
+                            'reason' => $this->safeReason('failed to delete expired subscription: ' . $e->getMessage()),
+                        ];
+                    }
                 }
             }
         } catch (\Throwable $e) {
-            // ★例外で落とさず、必ず契約形の配列で返す（caller の運用事故防止）
+            // ★transport 層例外のみここで扱う（queue段階の1件エラーでは来ない）
             $failed = max(1, $failed);
             $failures[] = [
                 'endpoint_hash' => null,

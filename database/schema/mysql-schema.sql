@@ -207,6 +207,10 @@ CREATE TABLE `push_subscriptions` (
   KEY `push_subscriptions_last_seen_at_index` (`last_seen_at`),
   CONSTRAINT `push_subscriptions_user_id_foreign` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+/*!40101 SET character_set_client = @saved_cs_client */;
+DROP TABLE IF EXISTS `push_subscriptions_backup`;
+/*!40101 SET @saved_cs_client     = @@character_set_client */;
+/*!40101 SET character_set_client = utf8 */;
 CREATE TABLE `push_subscriptions_backup` (
   `id` bigint(20) unsigned NOT NULL AUTO_INCREMENT,
   `user_id` bigint(20) unsigned DEFAULT NULL,
@@ -262,7 +266,8 @@ CREATE TABLE `remind_tasks` (
   KEY `rt_habit_log_idx` (`habit_log_id`),
   KEY `rt_habit_time_idx` (`habit_time_id`),
   CONSTRAINT `remind_tasks_habit_log_id_foreign` FOREIGN KEY (`habit_log_id`) REFERENCES `habit_logs` (`id`) ON DELETE CASCADE,
-  CONSTRAINT `remind_tasks_parent_task_id_foreign` FOREIGN KEY (`parent_task_id`) REFERENCES `remind_tasks` (`id`) ON DELETE SET NULL
+  CONSTRAINT `remind_tasks_parent_task_id_foreign` FOREIGN KEY (`parent_task_id`) REFERENCES `remind_tasks` (`id`) ON DELETE SET NULL,
+  CONSTRAINT `rt_root_fk` FOREIGN KEY (`root_task_id`) REFERENCES `remind_tasks` (`id`) ON DELETE SET NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 /*!40101 SET character_set_client = @saved_cs_client */;
 DROP TABLE IF EXISTS `users`;
@@ -341,3 +346,6 @@ INSERT INTO `migrations` (`id`, `migration`, `batch`) VALUES (46,'2026_01_01_000
 INSERT INTO `migrations` (`id`, `migration`, `batch`) VALUES (47,'2026_01_26_145103_create_remind_tasks_table',14);
 INSERT INTO `migrations` (`id`, `migration`, `batch`) VALUES (48,'2026_02_04_101919_enforce_unique_remind_tasks_time',15);
 INSERT INTO `migrations` (`id`, `migration`, `batch`) VALUES (49,'2026_02_09_160558_adopt_push_subscriptions_table',16);
+INSERT INTO `migrations` (`id`, `migration`, `batch`) VALUES (50,'2026_02_10_161035_align_push_subscriptions_schema',17);
+INSERT INTO `migrations` (`id`, `migration`, `batch`) VALUES (51,'2026_02_12_145129_add_index_to_push_subscriptions_last_seen_at',18);
+INSERT INTO `migrations` (`id`, `migration`, `batch`) VALUES (52,'2026_02_13_105922_add_root_task_id_fk_to_remind_tasks_table',19);

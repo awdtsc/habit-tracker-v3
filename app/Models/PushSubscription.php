@@ -16,6 +16,11 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
  * 運用事故防止（重要）:
  * - content_encoding の既定値がコードパスでブレると「送れたり送れなかったり」事故の温床
  *   => ここを唯一の真実として統一・正規化する
+ *
+ * ★厳格方針（統一）:
+ * - endpoint は「全ユーザーで一意」
+ * - 別 user_id に紐づく endpoint が来た場合は keys が一致していても移管しない
+ *   => SUBSCRIPTION_CONFLICT（呼び出し側で 409 へ）
  */
 class PushSubscription extends Model
 {
@@ -108,9 +113,10 @@ class PushSubscription extends Model
   /**
    * subscribe() payload から Upsert（DBのUNIQUE endpoint と一致させる）
    *
-   * ★重要: endpoint を他ユーザーから奪えないようにガード
-   * - 既存行の user_id が別なら、keys(p256dh/auth) が一致する場合のみ「同一端末」扱いで移管を許可
-   * - 一致しない場合は衝突として例外（呼び出し側で 409 に変換推奨）
+   * ★厳格方針:
+   * - endpoint は他ユーザーから奪えない（keys一致でも移管しない）
+   * - 既存行の user_id が別なら常に衝突として例外
+   *   => 呼び出し側で 409 に変換推奨
    */
   public static function upsertFromWebPush(int $userId, array $payload): self
   {
@@ -141,13 +147,9 @@ class PushSubscription extends Model
       ->where('endpoint', $endpoint) // ★DBの一意制約と一致
       ->first();
 
+    // ★厳格: 別ユーザーが所有していたら keys 一致でも常に拒否
     if ($existing && (int) $existing->user_id !== (int) $userId) {
-      $sameKeys = hash_equals((string) $existing->p256dh, (string) $p256dh)
-        && hash_equals((string) $existing->auth, (string) $auth);
-
-      if (!$sameKeys) {
-        throw new \RuntimeException('SUBSCRIPTION_CONFLICT');
-      }
+      throw new \RuntimeException('SUBSCRIPTION_CONFLICT');
     }
 
     // ★upsert も endpoint をキーに（DBと一致）

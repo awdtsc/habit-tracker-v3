@@ -20,7 +20,14 @@ class PushSubscriptionController extends Controller
    *
    * 事故防止:
    * - endpoint max は DB の varchar(500) に揃える
+   * - keys はサイズ/形式制約を付ける（DoS/異常データ抑止）
    * - レースで UNIQUE(endpoint) に当たった場合も 409 に正規化
+   *
+   * C対策（入力バリデーション強化）:
+   * - keys.p256dh / keys.auth に max + base64url系の形式チェック + min を追加
+   *
+   * F対策（情報最小化）:
+   * - 成功時に内部DB id を返さない
    */
   public function subscribe(Request $request)
   {
@@ -29,12 +36,19 @@ class PushSubscriptionController extends Controller
       return response()->json(['ok' => false, 'message' => 'Unauthenticated.'], 401);
     }
 
+    // base64url っぽい形式（WebPush鍵は base64url 系が普通）
+    // ※厳密なデコード検証まではしない（入口の軽量ガード）
+    $b64url = 'regex:/^[A-Za-z0-9\-_]+$/';
+
     $data = $request->validate([
       // DB: varchar(500)
       'endpoint' => ['required', 'string', 'max:500'],
+
       'keys' => ['required', 'array'],
-      'keys.p256dh' => ['required', 'string'],
-      'keys.auth' => ['required', 'string'],
+      // DoS/異常データ抑止: 長さ上限 + 形式 + 最低長（極端に短い値も弾く）
+      'keys.p256dh' => ['required', 'string', 'min:20', 'max:255', $b64url],
+      'keys.auth'   => ['required', 'string', 'min:8',  'max:255', $b64url],
+
       'contentEncoding' => ['nullable', 'string', 'max:32'],
       'content_encoding' => ['nullable', 'string', 'max:32'],
     ]);
@@ -70,7 +84,7 @@ class PushSubscriptionController extends Controller
 
     try {
       // 冪等更新: endpoint をキーにする（DB UNIQUE(endpoint) と一致）
-      $sub = PushSubscription::query()->updateOrCreate(
+      PushSubscription::query()->updateOrCreate(
         ['endpoint' => $endpoint],
         [
           'user_id' => $user->id,
@@ -113,9 +127,9 @@ class PushSubscriptionController extends Controller
       ], 500);
     }
 
+    // F対策: 成功時のレスポンスを最小化（内部IDなど返さない）
     return response()->json([
       'ok' => true,
-      'id' => $sub->id,
     ], 200);
   }
 
@@ -278,8 +292,8 @@ class PushSubscriptionController extends Controller
         $webPush->queueNotification($subscription, $payload);
       } catch (\Throwable $e) {
         $failed++;
+        // F対策: endpoint_hash を返さない（内部識別子の露出を避ける）
         $errors[] = [
-          'endpoint_hash' => $subRow->endpoint_hash,
           'reason' => $safeReason((string) $e->getMessage()),
         ];
       }
@@ -310,13 +324,13 @@ class PushSubscriptionController extends Controller
           ? (string) $report->getEndpoint()
           : '';
 
-        // ★DBと同一のハッシュ関数で統一
+        // ★DBと同一のハッシュ関数で統一（内部処理用）
         $endpointHash = $endpoint !== ''
           ? PushSubscription::hashEndpoint($endpoint)
           : null;
 
+        // F対策: endpoint_hash をレスポンスに含めない（必要最小限に）
         $errors[] = [
-          'endpoint_hash' => $endpointHash,
           'status' => $statusCode,
           'reason' => $safeReason($rawReason),
         ];

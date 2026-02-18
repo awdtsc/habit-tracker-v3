@@ -57,6 +57,17 @@ class PushSubscription extends Model
     'last_seen_at' => 'datetime',
   ];
 
+  /**
+   * ★漏洩防止: うっかりモデルを返しても secret-ish fields を露出しない
+   */
+  protected $hidden = [
+    'endpoint',
+    'p256dh',
+    'auth',
+    'public_key',
+    'auth_token',
+  ];
+
   public static function hashEndpoint(string $endpoint): string
   {
     $endpoint = trim($endpoint);

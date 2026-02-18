@@ -183,7 +183,7 @@ DROP TABLE IF EXISTS `push_subscriptions`;
 /*!40101 SET character_set_client = utf8 */;
 CREATE TABLE `push_subscriptions` (
   `id` bigint(20) unsigned NOT NULL AUTO_INCREMENT,
-  `user_id` bigint(20) unsigned DEFAULT NULL,
+  `user_id` bigint(20) unsigned NOT NULL,
   `endpoint` varchar(500) NOT NULL,
   `endpoint_hash` char(64) NOT NULL,
   `public_key` varchar(255) DEFAULT NULL,
@@ -213,7 +213,7 @@ DROP TABLE IF EXISTS `push_subscriptions_backup`;
 /*!40101 SET character_set_client = utf8 */;
 CREATE TABLE `push_subscriptions_backup` (
   `id` bigint(20) unsigned NOT NULL AUTO_INCREMENT,
-  `user_id` bigint(20) unsigned DEFAULT NULL,
+  `user_id` bigint(20) unsigned NOT NULL,
   `endpoint` varchar(500) NOT NULL,
   `endpoint_hash` char(64) NOT NULL,
   `public_key` varchar(255) DEFAULT NULL,

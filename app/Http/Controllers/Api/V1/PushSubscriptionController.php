@@ -4,11 +4,10 @@ namespace App\Http\Controllers\Api\V1;
 
 use App\Http\Controllers\Controller;
 use App\Models\PushSubscription;
+use App\Services\WebPushService;
 use Illuminate\Database\QueryException;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Log;
-use Minishlink\WebPush\Subscription;
-use Minishlink\WebPush\WebPush;
 
 class PushSubscriptionController extends Controller
 {
@@ -208,17 +207,6 @@ class PushSubscriptionController extends Controller
       'url' => ['required', 'string', 'max:2048'],
     ]);
 
-    $cfg = config('webpush.vapid');
-    if (empty($cfg['public_key']) || empty($cfg['private_key'])) {
-      return response()->json([
-        'ok' => false,
-        'sent' => 0,
-        'failed' => 0,
-        'removed' => 0,
-        'errors' => [['reason' => 'Missing VAPID keys']],
-      ], 503);
-    }
-
     // sanitize helper（レスポンス/ログ両方の最終防波堤）
     $safeReason = static function (string $reason): string {
       $reason = trim($reason);
@@ -242,11 +230,21 @@ class PushSubscriptionController extends Controller
     try {
       $days = (int) config('webpush.stale_prune_days', 0);
       if ($days > 0) {
-        PushSubscription::query()
+        $staleIds = PushSubscription::query()
           ->where('user_id', $user->id)
           ->whereNotNull('last_seen_at')
           ->where('last_seen_at', '<', now()->subDays($days))
-          ->delete();
+          ->orderBy('last_seen_at')
+          ->limit(500)
+          ->pluck('id')
+          ->all();
+
+        if (!empty($staleIds)) {
+          PushSubscription::query()
+            ->where('user_id', $user->id)
+            ->whereIn('id', $staleIds)
+            ->delete();
+        }
       }
     } catch (\Throwable $e) {
       // cleanup失敗は致命ではないので継続（ただしログは sanitize）
@@ -256,131 +254,40 @@ class PushSubscriptionController extends Controller
       ]);
     }
 
-    $subs = PushSubscription::query()
-      ->where('user_id', $user->id)
-      ->whereNotNull('endpoint_hash')
-      ->orderByDesc('last_seen_at')
-      ->get();
+    $payload = [
+      'title' => $data['title'],
+      'body' => $data['body'] ?? '',
+      'url' => $data['url'],
+    ];
 
-    if ($subs->isEmpty()) {
-      return response()->json(['ok' => false, 'message' => 'No subscriptions.'], 404);
+    $result = app(WebPushService::class)->sendToUser((int) $user->id, $payload);
+
+    $errors = array_map(
+      static fn(array $f): array => [
+        'code' => (string) ($f['code'] ?? 'PUSH_SEND_FAILED'),
+        'status' => $f['status'] ?? null,
+        'reason' => $safeReason((string) ($f['reason'] ?? 'push error')),
+      ],
+      $result['failures'] ?? []
+    );
+
+    $status = 207;
+    if (($result['ok'] ?? false) === true) {
+      $status = 200;
+    } elseif (($result['message'] ?? '') === 'No subscriptions') {
+      $status = 404;
+    } elseif (str_starts_with((string) ($result['message'] ?? ''), 'Missing VAPID keys')) {
+      $status = 503;
+    } elseif (($result['message'] ?? '') === 'webpush transport error') {
+      $status = 502;
     }
-
-    $webPush = $this->makeWebPush();
-
-    $sent = 0;
-    $failed = 0;
-    $removed = 0;
-    $errors = [];
-
-    foreach ($subs as $subRow) {
-      try {
-        $subscription = Subscription::create([
-          'endpoint' => $subRow->endpoint,
-          'publicKey' => $subRow->p256dh,
-          'authToken' => $subRow->auth,
-          // ★Model の唯一の真実で正規化（DB値が空/未知でも事故らない）
-          'contentEncoding' => PushSubscription::normalizeContentEncoding($subRow->content_encoding ?? null),
-        ]);
-
-        $payload = json_encode([
-          'title' => $data['title'],
-          'body' => $data['body'] ?? '',
-          'url' => $data['url'],
-        ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
-
-        $webPush->queueNotification($subscription, $payload);
-      } catch (\Throwable $e) {
-        $failed++;
-        // F対策: endpoint_hash を返さない（内部識別子の露出を避ける）
-        $errors[] = [
-          'reason' => $safeReason((string) $e->getMessage()),
-        ];
-      }
-    }
-
-    try {
-      foreach ($webPush->flush() as $report) {
-        if (method_exists($report, 'isSuccess') && $report->isSuccess()) {
-          $sent++;
-          continue;
-        }
-
-        $failed++;
-
-        $rawReason = method_exists($report, 'getReason')
-          ? (string) $report->getReason()
-          : 'failed';
-
-        $statusCode = null;
-        if (method_exists($report, 'getResponse')) {
-          $resp = $report->getResponse();
-          if ($resp && method_exists($resp, 'getStatusCode')) {
-            $statusCode = $resp->getStatusCode();
-          }
-        }
-
-        $endpoint = method_exists($report, 'getEndpoint')
-          ? (string) $report->getEndpoint()
-          : '';
-
-        // ★DBと同一のハッシュ関数で統一（内部処理用）
-        $endpointHash = $endpoint !== ''
-          ? PushSubscription::hashEndpoint($endpoint)
-          : null;
-
-        // F対策: endpoint_hash をレスポンスに含めない（必要最小限に）
-        $errors[] = [
-          'status' => $statusCode,
-          'reason' => $safeReason($rawReason),
-        ];
-
-        // 無効購読の掃除（push service 由来の確定パターン）
-        if ($endpointHash && ($statusCode === 404 || $statusCode === 410)) {
-          $deleted = PushSubscription::query()
-            ->where('user_id', $user->id)
-            ->where('endpoint_hash', $endpointHash)
-            ->delete();
-
-          $removed += (int) $deleted;
-        }
-      }
-    } catch (\Throwable $e) {
-      Log::warning('push/test flush failed', [
-        'user_id' => (int) $user->id,
-        'reason' => $safeReason((string) $e->getMessage()),
-      ]);
-
-      return response()->json([
-        'ok' => false,
-        'sent' => 0,
-        'failed' => 1,
-        'removed' => 0,
-        'errors' => [['reason' => 'webpush transport error']],
-      ], 502);
-    }
-
-    $ok = ($failed === 0);
 
     return response()->json([
-      'ok' => $ok,
-      'sent' => $sent,
-      'failed' => $failed,
-      'removed' => $removed,
+      'ok' => (bool) ($result['ok'] ?? false),
+      'sent' => (int) ($result['sent'] ?? 0),
+      'failed' => (int) ($result['failed'] ?? 0),
+      'removed' => (int) ($result['removed'] ?? 0),
       'errors' => $errors,
-    ], $ok ? 200 : 207);
-  }
-
-  protected function makeWebPush()
-  {
-    $cfg = config('webpush.vapid');
-
-    return new WebPush([
-      'VAPID' => [
-        'subject' => $cfg['subject'] ?? null,
-        'publicKey' => $cfg['public_key'] ?? null,
-        'privateKey' => $cfg['private_key'] ?? null,
-      ],
-    ]);
+    ], $status);
   }
 }

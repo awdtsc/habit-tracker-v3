@@ -2,7 +2,7 @@
 
 return [
 
-    /*
+  /*
     |--------------------------------------------------------------------------
     | Third Party Services
     |--------------------------------------------------------------------------
@@ -14,33 +14,25 @@ return [
     |
     */
 
-    'postmark' => [
-        'key' => env('POSTMARK_API_KEY'),
-    ],
+  'postmark' => [
+    'key' => env('POSTMARK_API_KEY'),
+  ],
 
-    'resend' => [
-        'key' => env('RESEND_API_KEY'),
-    ],
+  'resend' => [
+    'key' => env('RESEND_API_KEY'),
+  ],
 
-    'ses' => [
-        'key' => env('AWS_ACCESS_KEY_ID'),
-        'secret' => env('AWS_SECRET_ACCESS_KEY'),
-        'region' => env('AWS_DEFAULT_REGION', 'us-east-1'),
-    ],
+  'ses' => [
+    'key' => env('AWS_ACCESS_KEY_ID'),
+    'secret' => env('AWS_SECRET_ACCESS_KEY'),
+    'region' => env('AWS_DEFAULT_REGION', 'us-east-1'),
+  ],
 
-    'slack' => [
-        'notifications' => [
-            'bot_user_oauth_token' => env('SLACK_BOT_USER_OAUTH_TOKEN'),
-            'channel' => env('SLACK_BOT_USER_DEFAULT_CHANNEL'),
-        ],
+  'slack' => [
+    'notifications' => [
+      'bot_user_oauth_token' => env('SLACK_BOT_USER_OAUTH_TOKEN'),
+      'channel' => env('SLACK_BOT_USER_DEFAULT_CHANNEL'),
     ],
-
-    'webpush' => [
-        'vapid' => [
-            'subject' => env('VAPID_SUBJECT', 'mailto:you@example.com'),
-            'public_key' => env('VAPID_PUBLIC_KEY'),
-            'private_key' => env('VAPID_PRIVATE_KEY'),
-        ],
-    ],
+  ],
 
 ];

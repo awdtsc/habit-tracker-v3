@@ -1,47 +1,42 @@
 <?php
 
 use Illuminate\Support\Facades\Route;
-use Inertia\Inertia;
+use App\Http\Controllers\Auth\CookieAuthController;
 
 /*
 |--------------------------------------------------------------------------
-| Web Routes (Habit Tracker v3)
+| SPA entry
 |--------------------------------------------------------------------------
-| SPA（Vue Router）を基盤に置き、Laravel は初期ロードのみ担当。
-| Inertia は「最初の HTML ページを返す」最低限のルートだけにする。
-|--------------------------------------------------------------------------
+| Vue Router(history mode) のため、/login /today /week などは
+| すべて同じ Blade(view('app')) を返す。
+|
+| ただし /api/* は API ルート(api.php)に任せるので除外する。
+|
+| Phase 1（共存）:
+| - Bearer(/api/v1/*) は一切触らない
+| - Cookie(Session)ログイン検証用に /auth/cookie/* を追加
+| - catch-all より前に定義して飲まれないようにする
 */
 
-Route::get('/', fn () => Inertia::render('Today'))
-    ->middleware(['auth', 'verified'])
-    ->name('today');
+// ★これを追加：Laravel が route('login') を要求しても 500 にならない
+Route::view('/login', 'app')->name('login');
 
 /*
 |--------------------------------------------------------------------------
-| 認証後に表示される Habit Tracker 各画面
+| Cookie Auth (Phase 1 coexist / testing only)
 |--------------------------------------------------------------------------
-| これらは Vue Router が内部遷移するため、Inertia::render で
-| 空のコンテナページを返すだけ。
-|--------------------------------------------------------------------------
+| - Bearer(PAT) はそのまま維持
+| - Cookie(Session)認証はここで検証（Axios側はフラグONのときだけ叩く想定）
+| - 302リダイレクトに依存しないよう、Controller側でJSONを返す設計
 */
-
-Route::middleware(['auth', 'verified'])->group(function () {
-
-    Route::get('/today', fn () => Inertia::render('Today'))->name('today');
-
-    Route::get('/weekly', fn () => Inertia::render('Weekly'))->name('weekly');
-
-    Route::get('/habits', fn () => Inertia::render('Habits'))->name('habits');
-
-    Route::get('/reminders', fn () => Inertia::render('Reminders'))->name('reminders');
+Route::prefix('auth/cookie')->group(function () {
+    Route::post('/login',  [CookieAuthController::class, 'login']);
+    Route::post('/register', [CookieAuthController::class, 'register']);
+    Route::post('/logout', [CookieAuthController::class, 'logout']);
+    Route::get('/me',      [CookieAuthController::class, 'me']);
 });
 
-/*
-|--------------------------------------------------------------------------
-| Breeze のプロフィール画面（維持したい場合だけ）
-|--------------------------------------------------------------------------
-*/
-Route::middleware(['auth'])->group(function () {
-    Route::get('/profile', fn () => Inertia::render('Profile/Edit'))
-        ->name('profile.edit');
-});
+// 既存の SPA catch-all（/api は除外）
+Route::get('/{any}', function () {
+    return view('app');
+})->where('any', '^(?!api).*$');

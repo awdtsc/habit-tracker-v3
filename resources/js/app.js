@@ -1,27 +1,39 @@
-import '../css/app.css';
-import './bootstrap';
+// resources/js/app.js
 
-import { createInertiaApp } from '@inertiajs/vue3';
-import { resolvePageComponent } from 'laravel-vite-plugin/inertia-helpers';
-import { createApp, h } from 'vue';
-import { ZiggyVue } from '../../vendor/tightenco/ziggy';
+import "./bootstrap";
+import "../css/app.css";
 
-const appName = import.meta.env.VITE_APP_NAME || 'Laravel';
+import { createApp } from "vue";
+import App from "./App.vue";
+import router from "./router";
 
-createInertiaApp({
-    title: (title) => `${title} - ${appName}`,
-    resolve: (name) =>
-        resolvePageComponent(
-            `./Pages/${name}.vue`,
-            import.meta.glob('./Pages/**/*.vue'),
-        ),
-    setup({ el, App, props, plugin }) {
-        return createApp({ render: () => h(App, props) })
-            .use(plugin)
-            .use(ZiggyVue)
-            .mount(el);
-    },
-    progress: {
-        color: '#4B5563',
-    },
-});
+// ★ CookieモードのときだけCSRF cookieを取得（POST/PUT/DELETEを安定化）
+// - Bearerモードでは呼ばない（従来どおり）
+import { initCsrf, COOKIE_AUTH_ENABLED } from "./axios";
+
+async function boot() {
+    if (COOKIE_AUTH_ENABLED) {
+        try {
+            await initCsrf();
+            console.info("[boot] csrf cookie ready");
+        } catch (e) {
+            // CSRF取得失敗で即死させない（オフライン等）
+            console.warn("[boot] csrf cookie failed (continue)", e);
+        }
+    }
+
+    const app = createApp(App);
+
+    app.use(router);
+
+    // 初回ナビゲーション完了を待ってから mount（ガード/リダイレクト絡みのチラつき防止）
+    try {
+        await router.isReady();
+    } catch (e) {
+        console.warn("[boot] router.isReady() failed (continue)", e);
+    }
+
+    app.mount("#app");
+}
+
+boot();
